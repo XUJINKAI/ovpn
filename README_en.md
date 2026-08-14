@@ -130,4 +130,4 @@ Run `ovpn help` for full behavior, side effects, and recovery notes.
 
 ## License
 
-This project is licensed under the [MIT License](../LICENSE).
+This project is licensed under the [MIT License](LICENSE).

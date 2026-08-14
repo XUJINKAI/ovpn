@@ -7,7 +7,7 @@
 
 项目入口为`ovpn.sh`，安装后命令为`ovpn`。
 本目录可独立复制运行，内部脚本不作为公开接口。
-项目独立性、帮助、幂等、dry-run、审计、权限、备份和通用事务规则均遵循仓库根目录 [DESIGN.md](../DESIGN.md)，本文只说明 OpenVPN 特有的数据和系统交互。
+项目维护、帮助、幂等、dry-run、审计、权限、备份和通用事务规则遵循仓库根目录`AGENTS.md`，本文说明 OpenVPN 的完整产品设计和系统交互。
 
 目标系统只考虑 Debian 13，使用 OpenVPN 2.6、OpenSSL、systemd 和 nftables。
 不为 Debian 12、Ubuntu、旧版配置或旧命令提供兼容和迁移逻辑。

@@ -129,4 +129,4 @@ ovpn network nat_client enable|disable    # 管理 VPN 客户端 NAT
 
 ## License
 
-本项目使用 [MIT License](../LICENSE)。
+本项目使用 [MIT License](LICENSE)。
