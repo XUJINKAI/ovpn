@@ -1,0 +1,13 @@
+[Unit]
+Description=ovpn managed client NAT
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/openvpn/server/ovpn-nat.nft
+ExecStop=-/usr/sbin/nft delete table inet ovpn_nat_client
+
+[Install]
+WantedBy=multi-user.target
