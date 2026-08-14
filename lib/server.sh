@@ -91,13 +91,15 @@ ovpn_ca_init() {
     fi
     install -d -o root -g root -m 0700 -- "$OVPN_STATE_DIR/clients"
     : >"$OVPN_STATE_DIR/auth-db"
-    chmod 0600 -- "$OVPN_STATE_DIR/auth-db"
+    chown root:nogroup -- "$OVPN_STATE_DIR/auth-db"
+    chmod 0640 -- "$OVPN_STATE_DIR/auth-db"
     if ! ovpn_build_ca "$days"; then
         if (( exists == 1 )); then
             rm -rf -- "$OVPN_STATE_DIR/pki" "$OVPN_STATE_DIR/clients" "$OVPN_STATE_DIR/auth-db"
             for path in "$backup/pki" "$backup/clients" "$backup/auth-db"; do
                 [[ ! -e "$path" && ! -L "$path" ]] || cp -a -- "$path" "$OVPN_STATE_DIR/"
             done
+            [[ ! -e "$OVPN_STATE_DIR/auth-db" ]] || { chown root:nogroup -- "$OVPN_STATE_DIR/auth-db"; chmod 0640 -- "$OVPN_STATE_DIR/auth-db"; }
             ovpn_die "CA 初始化失败，旧状态已从 $backup 恢复"
         fi
         rm -rf -- "$OVPN_STATE_DIR/pki"
@@ -165,8 +167,8 @@ ovpn_apply_internal() {
         systemctl enable --now "$OVPN_SERVICE" || service_failed=1
     fi
     if (( service_failed == 1 )); then
-        rm -rf -- "$OVPN_SERVER_DIR"
-        [[ ! -d "$backup/server" ]] || cp -a -- "$backup/server" "$OVPN_SERVER_DIR"
+        rm -f -- "$OVPN_SERVER_CONF" "$OVPN_RUNTIME_CA" "$OVPN_RUNTIME_SERVER_CERT" "$OVPN_RUNTIME_SERVER_KEY" "$OVPN_RUNTIME_CRL" "$OVPN_RUNTIME_TLS_CRYPT_V2" "$OVPN_AUTH_VERIFY_SCRIPT"
+        [[ ! -d "$backup/server" ]] || cp -a -- "$backup/server"/. "$OVPN_SERVER_DIR"/
         rm -f -- "$OVPN_DROPIN"
         [[ ! -e "$backup/dropin/ovpn.conf" ]] || cp -a -- "$backup/dropin/ovpn.conf" "$OVPN_DROPIN"
         systemctl daemon-reload

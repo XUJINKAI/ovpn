@@ -1,0 +1,28 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Shell syntax check
+        run: |
+          set -e
+          for f in ovpn.sh lib/*.sh scripts/*.sh tests/*.sh; do
+            bash -n "$f"
+          done
+
+      - name: ShellCheck
+        run: |
+          set -e
+          for f in ovpn.sh lib/*.sh scripts/*.sh tests/*.sh; do
+            shellcheck -x "$f"
+          done
+
+      - name: CLI test suite
+        run: bash tests/test-cli.sh

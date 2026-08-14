@@ -59,12 +59,12 @@ ovpn [--dir DIR] [--dry-run] [--no-audit] COMMAND ...
   ovpn passwd NAME [--no-passwd]
   ovpn revoke NAME
   ovpn ls
-  ovpn export NAME [--template NAME] [--env KEY=VALUE]... [--add-config LINE]... 、
+  ovpn export NAME [--template NAME] [--env KEY=VALUE]... [--add-config LINE]...
                    [--output FILE] [--force]
 ```
 
 `status`只汇总服务、PKI、CA 与服务端证书过期时间、服务端配置、转发和模板状态。
-`ls`只列举客户端身份及其证书状态、过期时间、密码和已导出副本状态。
+`ls`只列举客户端身份及其证书状态、过期时间和密码状态。
 服务端命令与客户端命令在简短帮助和完整帮助中分区展示。
 
 全局参数放在入口解析，允许出现在命令前后，但文档统一写在命令前。
@@ -99,7 +99,6 @@ ovpn [--dir DIR] [--dry-run] [--no-audit] COMMAND ...
         auth-db
         clients/
             <name>/
-                owner
                 tls-crypt-v2.key
         backup/
         lock/
@@ -121,7 +120,7 @@ ovpn [--dir DIR] [--dry-run] [--no-audit] COMMAND ...
 `/etc/openvpn/ovpn`是工具唯一的持久管理目录，包含模板、PKI、客户端状态、备份和锁。
 把管理目录放在`/etc/openvpn`下可以让 OpenVPN 的配置、凭据和本工具状态集中管理，也便于统一收缩父目录权限和备份。
 管理目录本身为`root:root`、mode `0755`，只暴露固定的目录结构；`config/`及其中的配置归执行 install 的普通用户所有、mode 分别为`0700`和`0600`，允许该用户直接维护模板。
-`pki/`、`clients/`、`backup/`和`lock/`保持`root:root`、mode `0700`，其中`pki/`的权限作为整个 PKI 树的访问边界，不重复收缩内部目录；私钥和`auth-db`等敏感文件保持 mode `0600`。
+`pki/`、`clients/`、`backup/`和`lock/`保持`root:root`、mode `0700`，其中`pki/`的权限作为整个 PKI 树的访问边界，不重复收缩内部目录；私钥等敏感文件保持 mode `0600`。`auth-db`需要被降权后的 OpenVPN 认证脚本（模板默认`user nobody`/`group nogroup`）读取，保持`root:nogroup`、mode `0640`。
 该目录不放入`server/`或`client/`，文件不使用`.conf`后缀，OpenVPN 的 systemd generator 和实例 unit 不会把模板或管理状态误认为可启动配置。
 `ovpn`只能删除自己明确拥有的`ovpn/`子目录和生成文件，不得递归删除`/etc/openvpn`，也不得修改未知的服务端或客户端实例。
 默认目录之外的管理目录由`--dir`显式指定，目录内部结构保持不变。
@@ -235,7 +234,7 @@ OpenVPN、Easy-RSA、OpenSSL、nftables 和 ACL 等系统依赖不在`install`�
 
 ### `ovpn ca init [--force] [--days DAYS]`
 
-它使用 Easy-RSA 初始化签发数据库并生成无口令本地自签 CA，再由 Easy-RSA 签发服务端证书和生成 CRL，随后生成 DH 和 tls-crypt-v2 服务端密钥。
+它使用 Easy-RSA 初始化签发数据库并生成无口令本地自签 CA，再由 Easy-RSA 签发服务端证书和生成 CRL，随后生成 tls-crypt-v2 服务端密钥。
 CA 和服务端证书使用相同有效期，默认 3650 天；`--days DAYS`同时覆盖两者，有效范围为 1 到 36500 天。
 `ca init`不读取环境文件和模板，不渲染或校验 OpenVPN 配置、不部署运行文件、不执行 daemon-reload，也不启用或启动服务；这些操作统一由后续显式`apply`完成。
 公开命令不接收或导入外部 CA 证书、私钥和上级链，避免管理器自行实现第二套 CA 导入与校验协议。
@@ -246,7 +245,7 @@ CA 和服务端证书使用相同有效期，默认 3650 天；`--days DAYS`同�
 
 `ca init`不接收具体 OpenVPN 配置参数；初始化完成后应提示环境文件、模板路径、`ovpn apply --dry-run`和`ovpn apply`。
 
-初始化的副作用只包括创建 CA、签发数据库、服务端证书、DH、CRL、tls-crypt-v2 服务端密钥以及客户端和密码状态，不修改 OpenVPN 运行配置、服务、IPv4 转发或 NAT。
+初始化的副作用只包括创建 CA、签发数据库、服务端证书、CRL、tls-crypt-v2 服务端密钥以及客户端和密码状态，不修改 OpenVPN 运行配置、服务、IPv4 转发或 NAT。
 
 ## 服务端应用与控制
 
@@ -303,6 +302,7 @@ IPv4 转发与客户端 NAT 彼此独立，启用其中一个不会隐式启用�
 `add`使用当前 CA 签发客户端证书并生成独立 tls-crypt-v2 客户端密钥。
 客户端证书默认有效 1095 天；`--days DAYS`可以指定 1 到 36500 天的有效期。
 默认从终端交互读取可选密码，直接回车表示不设置；`--no-passwd`完全跳过密码提示。
+密码摘要先于证书签发从终端读取并计算，证书签发成功后才一次性写入认证数据库，中途任何一步失败都不会留下部分客户端状态。
 
 新增客户端只建立身份和密钥状态，不自动导出配置，也不依赖某个客户端模板。
 这样模板变化不会要求重签证书，同一身份也可以安全导出多个网络策略版本。

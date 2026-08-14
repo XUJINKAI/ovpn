@@ -75,23 +75,45 @@ unset hash
 auth_state="$test_dir/auth-state"
 mkdir -p "$auth_state"
 printf 'client1:$6$old$hash\nclient1:$6$duplicate$hash\n' >"$auth_state/auth-db"
+export INSTALL_LOG="$test_dir/auth-install.log"
 bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
     source "$1/lib/client.sh"
     OVPN_STATE_DIR="$2"
-    install() { local source="${@: -2:1}" target="${@: -1}"; cp -- "$source" "$target"; chmod 0600 -- "$target"; }
+    install() {
+        local prev="" arg mode="" source target
+        for arg in "$@"; do
+            [[ "$prev" == -m ]] && mode="$arg"
+            prev="$arg"
+        done
+        source="${@: -2:1}"; target="${@: -1}"
+        printf '%s\n' "$*" >>"$INSTALL_LOG"
+        cp -- "$source" "$target"
+        chmod "$mode" -- "$target"
+    }
     ovpn_auth_update client1 "!"
 ' _ "$PROJECT_DIR" "$auth_state"
 [[ "$(<"$auth_state/auth-db")" == 'client1:!' ]] || fail "cert-only 状态未写为显式记录"
-[[ "$(stat -c '%a' "$auth_state/auth-db")" == 600 ]] || fail "认证数据库权限错误"
+[[ "$(stat -c '%a' "$auth_state/auth-db")" == 640 ]] || fail "认证数据库权限错误"
+[[ "$(<"$INSTALL_LOG")" == *'-o root -g nogroup -m 0640'* ]] || fail "认证数据库属主应为 root:nogroup 0640"
 bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
     source "$1/lib/client.sh"
     OVPN_STATE_DIR="$2"
-    install() { local source="${@: -2:1}" target="${@: -1}"; cp -- "$source" "$target"; chmod 0600 -- "$target"; }
+    install() {
+        local prev="" arg mode="" source target
+        for arg in "$@"; do
+            [[ "$prev" == -m ]] && mode="$arg"
+            prev="$arg"
+        done
+        source="${@: -2:1}"; target="${@: -1}"
+        cp -- "$source" "$target"
+        chmod "$mode" -- "$target"
+    }
     ovpn_auth_update client1
 ' _ "$PROJECT_DIR" "$auth_state"
 [[ ! -s "$auth_state/auth-db" ]] || fail "撤销身份时未删除认证记录"
+unset INSTALL_LOG
 
 mock_easyrsa="$test_dir/easyrsa"
 cat >"$mock_easyrsa" <<'EOF'
@@ -247,6 +269,20 @@ output="$(bash -Eeuo pipefail -c '
     ovpn_apply_env "$2" values
 ' _ "$PROJECT_DIR" "$rendered" 2>&1)"
 assert_contains "$output" '模板变量 {{TEST}} 出现 0 次'
+printf 'v {{WEIRD}}\n' >"$rendered"
+bash -Eeuo pipefail -c '
+    source "$1/lib/common.sh"
+    declare -A values=([WEIRD]="C:\\Users\\bob&x|y/etc")
+    ovpn_apply_env "$2" values
+' _ "$PROJECT_DIR" "$rendered"
+assert_contains "$(<"$rendered")" 'v C:\Users\bob&x|y/etc'
+printf 'ca {{CA_CERT}}\n' >"$rendered"
+bash -Eeuo pipefail -c '
+    source "$1/lib/common.sh"
+    ovpn_template_replace "$2" "$3" CA_CERT "/etc/openvpn/server/ca.crt"
+' _ "$PROJECT_DIR" "$rendered" "$test_dir/paths.conf"
+assert_contains "$(<"$test_dir/paths.conf")" 'ca /etc/openvpn/server/ca.crt'
+[[ "$(<"$test_dir/paths.conf")" != *'{{'* ]] || fail "路径占位符未替换"
 
 client_template="$test_dir/client-template.conf.tpl"
 printf 'auth-user-pass\n{{APPEND_CONFIG}}\n# comments\n{{CA_INLINE}}\n{{CLIENT_CERT_INLINE}}\n{{CLIENT_KEY_INLINE}}\n{{TLS_CRYPT_V2_CLIENT_INLINE}}\n' >"$client_template"
@@ -305,7 +341,7 @@ cp -- "$PROJECT_DIR/config/client/default.conf.tpl" "$server_state/config/client
 cp -- "$PROJECT_DIR/network/"* "$server_state/network/"
 cp -- "$PROJECT_DIR/systemd/"* "$server_state/systemd/"
 cp -- "$PROJECT_DIR/scripts/"* "$server_state/scripts/"
-printf 'SERVER_PORT=49999\nSERVER=10.9.0.0 255.255.255.0\n' >"$server_state/config/ovpn.env"
+printf 'SERVER_PORT=49999\nSERVER=10.9.0.0 255.255.255.0\nENDPOINT=vpn.example.com\nCLIENT_PORT=49999\nCLIENT_PROTO=udp4\nCLIENT_DEV=tun\nCLIENT_VERB=3\nAUTH_DIGEST=SHA256\nDATA_CIPHERS=AES-256-GCM\nKEEPALIVE=10 120\n' >"$server_state/config/ovpn.env"
 printf 'port {{SERVER_PORT}}\nserver {{SERVER}}\nca {{CA_CERT}}\ncert {{SERVER_CERT}}\nkey {{SERVER_KEY}}\ndh none\ncrl-verify {{CRL_FILE}}\ntls-crypt-v2 {{TLS_CRYPT_V2_SERVER_KEY}}\nauth-user-pass-verify {{AUTH_VERIFY_SCRIPT}} via-file\nsetenv OVPN_AUTH_DB {{AUTH_DB}}\n{{APPEND_CONFIG}}\n' >"$server_state/config/server/default.conf.tpl"
 bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
@@ -356,7 +392,8 @@ printf cert >"$server_state/pki/ca-chain.crt"
 printf key >"$server_state/pki/private/ca.key"
 : >"$server_state/pki/index.txt"
 mkdir -p "$server_state/clients/client1"
-printf cert >"$server_state/pki/issued/client1.crt"
+printf key >"$server_state/clients/client1/tls-crypt-v2.key"
+openssl req -x509 -newkey rsa:2048 -nodes -keyout "$server_state/pki/private/client1.key" -out "$server_state/pki/issued/client1.crt" -days 3650 -subj "/CN=client1" >/dev/null 2>&1
 : >"$server_state/auth-db"
 output="$($OVPN --dir "$server_state" ls)"
 assert_contains "$output" 'EXPIRES'
@@ -386,10 +423,48 @@ assert_contains "$output" '服务端证书过期时间：Jan 01 00:00:00 2035 GM
 output="$($OVPN --dir "$server_state" --dry-run add client2 --no-passwd --days 1200)"
 assert_contains "$output" "$server_state/clients/client2"
 assert_fails "$OVPN" --dir "$server_state" --dry-run add client2 --days 0
+export OVPN_ORDER_LOG="$test_dir/order.log"
+bash -Eeuo pipefail -c '
+    source "$1/lib/common.sh"
+    source "$1/lib/client.sh"
+    OVPN_STATE_DIR="$2"
+    ovpn_require_root() { :; }
+    ovpn_require_initialized() { :; }
+    ovpn_lock() { :; }
+    ovpn_password_hash() { printf "HASH\n" >>"$OVPN_ORDER_LOG"; printf "!\n"; }
+    ovpn_pki_sign_client() { printf "SIGNED\n" >>"$OVPN_ORDER_LOG"; }
+    ovpn_auth_update() { printf "AUTH\n" >>"$OVPN_ORDER_LOG"; }
+    ovpn_print_audit() { :; }
+    ovpn_client_add clientorder
+' _ "$PROJECT_DIR" "$test_dir/order-state" 2>&1
+[[ "$(<"$OVPN_ORDER_LOG")" == $'HASH\nSIGNED\nAUTH' ]] || fail "密码摘要应先于证书签发与认证库写入：$(<"$OVPN_ORDER_LOG")"
+rm -f -- "$OVPN_ORDER_LOG"
+unset OVPN_ORDER_LOG
+if [[ ! -r /dev/tty ]]; then
+    output="$(bash -Eeuo pipefail -c '
+        source "$1/lib/common.sh"
+        source "$1/lib/client.sh"
+        OVPN_STATE_DIR="$2"
+        ovpn_require_root() { :; }
+        ovpn_require_initialized() { :; }
+        ovpn_lock() { :; }
+        ovpn_pki_sign_client() { printf "SIGNED\n"; }
+        ovpn_auth_update() { printf "AUTH\n"; }
+        ovpn_print_audit() { :; }
+        ovpn_client_add clienttty
+    ' _ "$PROJECT_DIR" "$test_dir/tty-state" 2>&1)"
+    assert_contains "$output" '交互终端'
+    [[ "$output" != *SIGNED* ]] || fail "无终端时不应先签发证书"
+    [[ "$output" != *AUTH* ]] || fail "无终端时不应写入认证数据库"
+fi
 output="$($OVPN --dir "$server_state" --dry-run passwd client1 --no-passwd)"
 assert_contains "$output" "$server_state/auth-db"
-output="$(cd "$test_dir" && "$OVPN" --dir "$server_state" --dry-run export client1)"
+mkdir -p "$test_dir/bin"
+printf '#!/usr/bin/env bash\nexit 0\n' >"$test_dir/bin/openvpn"
+chmod 0755 "$test_dir/bin/openvpn"
+output="$(cd "$test_dir" && PATH="$test_dir/bin:$PATH" "$OVPN" --dir "$server_state" --dry-run export client1)"
 assert_contains "$output" "$test_dir/client1.ovpn"
+if [[ -e "$test_dir/client1.ovpn" ]]; then fail "export dry-run 写入了目标文件"; fi
 output="$($OVPN --dir "$server_state" --dry-run revoke client1)"
 assert_contains "$output" "$server_state/clients/client1"
 output="$($OVPN --dir "$server_state" --dry-run network nat_client enable)"

@@ -53,10 +53,6 @@ ovpn_validate_name() {
     [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ && "$1" != server ]]
 }
 
-ovpn_validate_endpoint() {
-    [[ -n "$1" && "$1" != -* && "$1" =~ ^[A-Za-z0-9._:-]+$ ]]
-}
-
 ovpn_validate_port() {
     [[ "$1" =~ ^[0-9]+$ ]] && (( 10#$1 >= 1 && 10#$1 <= 65535 ))
 }
@@ -178,7 +174,7 @@ ovpn_template_replace() {
         elif (( count > 1 )); then
             ovpn_warn "模板变量 {{$token}} 出现 $count 次，将替换全部匹配位置"
         fi
-        escaped="${value//\/\\}"
+        escaped="${value//\\/\\\\}"
         escaped="${escaped//&/\\&}"
         escaped="${escaped//|/\\|}"
         sed -i "s|{{$token}}|$escaped|g" "$output"
@@ -267,7 +263,7 @@ ovpn_apply_env() {
         elif (( count > 1 )); then
             ovpn_warn "模板变量 {{$key}} 出现 $count 次，将替换全部匹配位置"
         fi
-        escaped="${value//\/\\}"
+        escaped="${value//\\/\\\\}"
         escaped="${escaped//&/\\&}"
         escaped="${escaped//|/\\|}"
         sed -i "s|{{$key}}|$escaped|g" "$file"

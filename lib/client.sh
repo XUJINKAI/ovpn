@@ -7,30 +7,38 @@ ovpn_auth_update() {
     ovpn_register_temp "$temporary"
     awk -F: -v name="$name" '$1 != name' "$auth" >"$temporary"
     [[ -z "$value" ]] || printf '%s:%s\n' "$name" "$value" >>"$temporary"
-    install -o root -g root -m 0600 -- "$temporary" "$auth"
+    install -o root -g nogroup -m 0640 -- "$temporary" "$auth"
     rm -f -- "$temporary"
 }
 
-ovpn_password_update() {
-    local name="$1" no_passwd="$2" password hash
+ovpn_password_hash() {
+    # 只从终端读取密码并返回 SHA-512 摘要，不写任何状态；无终端时在读取前报错。
+    local no_passwd="$1" password hash
     if [[ "$no_passwd" == 1 ]]; then
-        password=""
-    else
-        [[ -r /dev/tty ]] || ovpn_die "设置密码需要交互终端；使用 --no-passwd 跳过"
-        read -r -s -p "客户端密码（留空表示不设置）：" password </dev/tty
-        printf '\n' >&2
+        printf '%s\n' '!'
+        return
     fi
+    [[ -r /dev/tty ]] || ovpn_die "设置密码需要交互终端；使用 --no-passwd 跳过"
+    read -r -s -p "客户端密码（留空表示不设置）：" password </dev/tty
+    printf '\n' >&2
     if [[ -n "$password" ]]; then
         hash="$(printf '%s\n' "$password" | openssl passwd -6 -stdin)"
     else
         hash='!'
     fi
+    unset password
+    printf '%s\n' "$hash"
+}
+
+ovpn_password_update() {
+    local name="$1" no_passwd="$2" hash
+    hash="$(ovpn_password_hash "$no_passwd")"
     ovpn_auth_update "$name" "$hash"
-    unset password hash
+    unset hash
 }
 
 ovpn_client_add() {
-    local name="${1:-}" no_passwd=0 days=1095
+    local name="${1:-}" no_passwd=0 days=1095 hash
     shift || true
     while (( $# > 0 )); do
         case "$1" in
@@ -46,9 +54,11 @@ ovpn_client_add() {
     [[ ! -e "$OVPN_STATE_DIR/clients/$name" ]] || ovpn_die "客户端已存在：$name"
     ovpn_audit_file A "$OVPN_STATE_DIR/clients/$name"
     [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    hash="$(ovpn_password_hash "$no_passwd")"
     ovpn_lock
     ovpn_pki_sign_client "$name" "$days"
-    ovpn_password_update "$name" "$no_passwd"
+    ovpn_auth_update "$name" "$hash"
+    unset hash
     ovpn_print_audit
 }
 
@@ -144,7 +154,6 @@ ovpn_client_export() {
     [[ "$output" == /* ]] || output="$PWD/$output"
     [[ ! -L "$output" ]] || ovpn_die "拒绝覆盖符号链接：$output"
     ovpn_audit_file A "$output"
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
     temporary="$(mktemp -d)"
     ovpn_register_temp "$temporary"
     grep -q "^${name}:"'\$6\$' "$OVPN_STATE_DIR/auth-db" && auth_line=auth-user-pass
@@ -160,6 +169,7 @@ ovpn_client_export() {
         ovpn_die "客户端模板包含未定义环境变量：$template"
     fi
     ovpn_core_test_file "$rendered"
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { rm -rf -- "$temporary"; ovpn_print_audit "检查成功"; return; }
     if [[ -e "$output" && $force == 0 ]] && ! cmp -s -- "$rendered" "$output"; then ovpn_die "目标已存在；使用 --force 覆盖：$output"; fi
     ovpn_atomic_install "$rendered" "$output" 0600 "$user" "$user"
     rm -rf -- "$temporary"

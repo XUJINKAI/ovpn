@@ -126,7 +126,7 @@ ovpn_uninstall() {
     fi
     systemctl disable --now "$OVPN_SERVICE" >/dev/null 2>&1 || true
     systemctl disable --now "$OVPN_NAT_SERVICE" >/dev/null 2>&1 || true
-    rm -f -- "$OVPN_SERVER_CONF" "$OVPN_RUNTIME_CA" "$OVPN_RUNTIME_SERVER_CERT" "$OVPN_RUNTIME_SERVER_KEY" "$OVPN_RUNTIME_CRL" "$OVPN_RUNTIME_TLS_CRYPT_V2" "$OVPN_AUTH_VERIFY_SCRIPT" "$OVPN_SERVER_DIR/ovpn-up.sh" "$OVPN_SERVER_DIR/ovpn-down.sh" "$OVPN_NAT_RULES" "$OVPN_DROPIN" "$OVPN_SYSCTL_FILE" "$OVPN_NAT_UNIT"
+    rm -f -- "$OVPN_SERVER_CONF" "$OVPN_RUNTIME_CA" "$OVPN_RUNTIME_SERVER_CERT" "$OVPN_RUNTIME_SERVER_KEY" "$OVPN_RUNTIME_CRL" "$OVPN_RUNTIME_TLS_CRYPT_V2" "$OVPN_AUTH_VERIFY_SCRIPT" "$OVPN_NAT_RULES" "$OVPN_DROPIN" "$OVPN_SYSCTL_FILE" "$OVPN_NAT_UNIT"
     rmdir --ignore-fail-on-non-empty -- "$(dirname -- "$OVPN_AUTH_VERIFY_SCRIPT")" "$(dirname -- "$OVPN_DROPIN")" "$OVPN_SERVER_DIR" 2>/dev/null || true
     systemctl daemon-reload
     (( purge == 0 )) || rm -rf -- "$OVPN_STATE_DIR"

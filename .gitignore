@@ -1,0 +1,20 @@
+# ovpn export 生成的客户端配置（含私钥），禁止提交
+*.ovpn
+
+# 证书、密钥与签发材料
+*.key
+*.pem
+*.crt
+*.csr
+*.p12
+*.pfx
+
+# 管理状态（若在本目录用 --dir 初始化）
+pki/
+clients/
+auth-db
+backup/
+lock/
+
+# 本地验证残留
+.dsh-tmp/
