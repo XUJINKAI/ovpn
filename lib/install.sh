@@ -110,15 +110,18 @@ ovpn_uninstall() {
     ovpn_audit_file D "$OVPN_NAT_RULES"
     if (( purge == 1 )); then
         ovpn_audit_file D "$OVPN_STATE_DIR"
-        (( no_backup == 1 )) || ovpn_audit_file A "$OVPN_PURGE_BACKUP_ROOT/purge-<时间>"
+        if (( no_backup == 0 && OVPN_DRY_RUN == 1 )); then
+            ovpn_audit_file A "$OVPN_PURGE_BACKUP_ROOT/purge-<时间>"
+        fi
     fi
     [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
 
     if (( purge == 1 )); then
         ovpn_confirm PURGE "警告：这会删除 CA、私钥、客户端状态和用户模板。"
-        if (( no_backup == 0 && -e "$OVPN_STATE_DIR" )); then
+        if (( no_backup == 0 )) && [[ -e "$OVPN_STATE_DIR" ]]; then
             timestamp="$(date +%Y%m%d-%H%M%S)"
             backup_dir="$OVPN_PURGE_BACKUP_ROOT/purge-$timestamp"
+            ovpn_audit_file A "$backup_dir"
             install -d -o root -g root -m 0700 -- "$backup_dir"
             cp -a -- "$OVPN_STATE_DIR" "$backup_dir/ovpn"
             ovpn_cleanup_backups "$OVPN_PURGE_BACKUP_ROOT"

@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # ovpn - Debian 13 OpenVPN Community 管理器。
+# shellcheck disable=SC2034  # 入口设置的全局状态由随后 source 的 lib 模块消费，独立检查时看似未使用。
 
 set -Eeuo pipefail
 

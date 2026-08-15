@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 客户端身份、密码、吊销与模板导出。
+# shellcheck disable=SC2034  # OVPN_WARN_UNUSED_TEMPLATE_VARS 与通过名称传递的 nameref 由被调用函数消费。
 
 ovpn_auth_update() {
     local name="$1" value="${2:-}" auth="$OVPN_STATE_DIR/auth-db" temporary
@@ -120,6 +121,7 @@ ovpn_client_export() {
     local name="${1:-}" template_name=default output="" force=0 user template client_dir temporary rendered auth_line="" assignment key
     local -a env_assignments=() extra_configs=()
     local -A env_values=()
+    local OVPN_WARN_UNUSED_TEMPLATE_VARS=0
     shift || true
     while (( $# > 0 )); do
         case "$1" in
@@ -156,6 +158,8 @@ ovpn_client_export() {
     ovpn_audit_file A "$output"
     temporary="$(mktemp -d)"
     ovpn_register_temp "$temporary"
+    # grep BRE 需要字面 $6$：单引号保留反斜杠，使 $ 不作为行尾锚点。
+    # shellcheck disable=SC2016,SC2100
     grep -q "^${name}:"'\$6\$' "$OVPN_STATE_DIR/auth-db" && auth_line=auth-user-pass
     ovpn_inline_block ca "$OVPN_STATE_DIR/pki/ca-chain.crt" >"$temporary/ca"
     ovpn_certificate_to_pem "$OVPN_STATE_DIR/pki/issued/$name.crt" "$temporary/client.crt"
@@ -201,7 +205,10 @@ ovpn_client_ls() {
     while IFS= read -r -d '' dir; do
         name="$(basename -- "$dir")"
         if ! ovpn_validate_name "$name" || [[ -L "$dir" ]]; then printf '%-24s %s\n' "$name" 异常; continue; fi
-        password=否; grep -q "^${name}:"'\$6\$' "$OVPN_STATE_DIR/auth-db" 2>/dev/null && password=是
+        password=否
+        # grep BRE 需要字面 $6$：单引号保留反斜杠，使 $ 不作为行尾锚点。
+        # shellcheck disable=SC2016,SC2100
+        grep -q "^${name}:"'\$6\$' "$OVPN_STATE_DIR/auth-db" 2>/dev/null && password=是
         expiry="$(ovpn_cert_expiry "$OVPN_STATE_DIR/pki/issued/$name.crt")"
         printf '%-24s %-6s %-8s %s\n' "$name" "$([[ -s "$OVPN_STATE_DIR/pki/issued/$name.crt" ]] && printf 有效 || printf 异常)" "$password" "$expiry"
     done < <(find "$OVPN_STATE_DIR/clients" -mindepth 1 -maxdepth 1 -type d -print0 | sort -z)

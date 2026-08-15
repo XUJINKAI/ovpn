@@ -206,7 +206,7 @@ PKI、客户端私钥、tls-crypt-v2 密钥、密码摘要和导出的完整客�
 `export --add-config LINE`可重复指定，把每个非空单行参数按给定顺序替换到模板第一个独占整行的`{{APPEND_CONFIG}}`占位符，再执行 OpenVPN 客户端校验；占位符缺失时追加到文件末尾，出现多次时删除后续位置，没有追加配置时移除全部位置。
 环境值和追加配置不得用于传递密码、私钥或其他不应进入命令历史的秘密。
 
-模板中的密钥材料占位符出现零次或多次时与其他已定义变量一样只输出警告，出现多次时替换全部位置；未知占位符仍会导致导出失败。
+模板中的密钥材料占位符出现零次或多次时只输出警告，出现多次时替换全部位置；公共环境文件中未在本次模板出现的变量（尤其是另一端分区的变量）不输出未使用警告，与服务端渲染一致；未知占位符仍会导致导出失败。
 模板文件允许由执行 install 的配置管理用户拥有，但必须是非符号链接普通文件；模板名只接受安全名称，不能包含路径分隔符或扩展名。
 
 模板是用户配置，工具读取时遵循宽进原则，不限制普通 OpenVPN 指令集合。
@@ -376,6 +376,39 @@ Easy-RSA 的原生已签证书保持不变；导出时使用 OpenSSL 在临时�
 `ovpn uninstall --purge`删除管理目录中的模板、CA、私钥、客户端、密码和普通状态，必须在终端输入`PURGE`。
 默认先在固定的`/var/backups/ovpn/`创建 root-only 完整备份，避免备份被连同管理目录删除。
 只有明确指定`--no-backup`时才不创建恢复副本。
+
+### 卸载后的文件布局
+
+`uninstall`不删除整个`/etc/openvpn`，只移除工具拥有的固定运行文件。
+`/etc/openvpn`目录本身和 openvpn 软件包自带文件（`client/`、`update-resolv-conf`）始终保留。
+管理数据是否保留由参数决定；以下布局以默认管理目录`/etc/openvpn/ovpn`为例，`--dir`只替换管理目录路径，不改变固定运行路径。
+
+`ovpn uninstall`停止服务并删除入口、内部模块和全部运行文件，保留管理目录：
+
+```text
+/usr/local/bin/ovpn                                  # 已删除
+/usr/local/lib/ovpn/                                 # 已删除
+/etc/openvpn/
+    ovpn/                                            # 保留，内部结构不变
+        config/                                      # 用户模板与公共环境文件
+        scripts/ network/ systemd/                   # 静态资源
+        pki/ auth-db clients/ backup/ lock/          # 证书、密码、客户端状态与备份
+    server/                                          # 运行文件已删除；目录清空后一并移除，管理员自行放入的文件会使目录保留
+    client/                                          # 软件包自带，未动
+    update-resolv-conf                               # 软件包自带，未动
+/etc/systemd/system/openvpn-server@server.service.d/ovpn.conf   # 已删除，空目录一并移除
+/etc/sysctl.d/99-ovpn.conf                           # 已删除
+/etc/systemd/system/ovpn-nat.service                 # 已删除
+```
+
+`ovpn uninstall --purge`在上一种布局的基础上删除管理目录，并在`/var/backups/ovpn/`留下 root-only 完整备份：
+
+```text
+/etc/openvpn/ovpn/                                   # 已删除
+/var/backups/ovpn/purge-<时间>/ovpn/                 # root:root、mode 0700 的完整管理目录副本，遵循保留策略
+```
+
+`ovpn uninstall --purge --no-backup`与上一种布局相同，但不创建备份，管理数据没有恢复副本。
 
 普通 apply 和客户端修改的失败恢复依赖本次事务副本。
 强制 CA 初始化和 purge 的长期恢复依赖对应完整备份。

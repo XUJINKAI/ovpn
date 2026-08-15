@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # 服务端初始化、渲染、应用和 CA 维护。
+# shellcheck disable=SC2034  # OVPN_WARN_UNUSED_TEMPLATE_VARS 与通过名称传递的 nameref 由被调用函数消费。
 
 ovpn_render_server() {
     local output="$1" template_name="${2:-default}" assignments_name="${3:-}" configs_name="${4:-}"
@@ -137,6 +138,7 @@ ovpn_apply_internal() {
         rm -rf -- "$temporary"
         ovpn_info "运行配置没有变化"
         if (( activate == 1 )); then
+            ovpn_audit_command systemctl enable --now "$OVPN_SERVICE"
             systemctl enable --now "$OVPN_SERVICE" || ovpn_die "OpenVPN 启动失败；运行配置未改变，请检查 journalctl -u $OVPN_SERVICE"
             ovpn_info "OpenVPN 服务已启用并启动"
         fi
@@ -158,12 +160,20 @@ ovpn_apply_internal() {
     install -o root -g root -m 0600 -- "$temporary/tls-crypt-v2.key" "$OVPN_RUNTIME_TLS_CRYPT_V2"
     install -o root -g root -m 0755 -- "$temporary/auth-verify.sh" "$OVPN_AUTH_VERIFY_SCRIPT"
     install -o root -g root -m 0644 -- "$OVPN_RESOURCE_DIR/systemd/ovpn.conf" "$OVPN_DROPIN"
+    ovpn_audit_command systemctl daemon-reload
     systemctl daemon-reload
     local service_failed=0
     if (( was_active == 1 )); then
-        if (( activate == 1 )) && ! systemctl enable "$OVPN_SERVICE"; then service_failed=1; fi
-        if (( service_failed == 0 )) && ! systemctl restart "$OVPN_SERVICE"; then service_failed=1; fi
+        if (( activate == 1 )); then
+            ovpn_audit_command systemctl enable "$OVPN_SERVICE"
+            if ! systemctl enable "$OVPN_SERVICE"; then service_failed=1; fi
+        fi
+        if (( service_failed == 0 )); then
+            ovpn_audit_command systemctl restart "$OVPN_SERVICE"
+            if ! systemctl restart "$OVPN_SERVICE"; then service_failed=1; fi
+        fi
     elif (( activate == 1 )); then
+        ovpn_audit_command systemctl enable --now "$OVPN_SERVICE"
         systemctl enable --now "$OVPN_SERVICE" || service_failed=1
     fi
     if (( service_failed == 1 )); then
@@ -183,6 +193,8 @@ ovpn_apply_internal() {
     ovpn_audit_file M "$OVPN_RUNTIME_SERVER_KEY"
     ovpn_audit_file M "$OVPN_RUNTIME_CRL"
     ovpn_audit_file M "$OVPN_RUNTIME_TLS_CRYPT_V2"
+    ovpn_audit_file M "$OVPN_AUTH_VERIFY_SCRIPT"
+    ovpn_audit_file M "$OVPN_DROPIN"
     rm -rf -- "$temporary"
 }
 
@@ -205,11 +217,6 @@ ovpn_apply() {
     ovpn_validate_name "$template_name" || ovpn_die "模板名称格式无效：$template_name"
     ovpn_require_root
     ovpn_require_initialized
-    ovpn_audit_file M "$OVPN_SERVER_CONF"
-    ovpn_audit_file M "$OVPN_AUTH_VERIFY_SCRIPT"
-    ovpn_audit_file M "$OVPN_DROPIN"
-    ovpn_audit_command systemctl daemon-reload
-    ovpn_audit_command systemctl enable --now "$OVPN_SERVICE"
     if [[ "$OVPN_DRY_RUN" == 1 ]]; then
         temporary="$(mktemp -d)"
         ovpn_register_temp "$temporary"
@@ -219,6 +226,16 @@ ovpn_apply() {
         ovpn_safe_regular_file "$OVPN_STATE_DIR/pki/crl.pem"
         install -m 0644 -- "$OVPN_STATE_DIR/pki/crl.pem" "$temporary/crl.pem"
         ovpn_core_test_file "$temporary/server.conf" "$temporary/auth-verify.sh"
+        ovpn_audit_command systemctl daemon-reload
+        ovpn_audit_command systemctl enable --now "$OVPN_SERVICE"
+        ovpn_audit_file M "$OVPN_SERVER_CONF"
+        ovpn_audit_file M "$OVPN_RUNTIME_CA"
+        ovpn_audit_file M "$OVPN_RUNTIME_SERVER_CERT"
+        ovpn_audit_file M "$OVPN_RUNTIME_SERVER_KEY"
+        ovpn_audit_file M "$OVPN_RUNTIME_CRL"
+        ovpn_audit_file M "$OVPN_RUNTIME_TLS_CRYPT_V2"
+        ovpn_audit_file M "$OVPN_AUTH_VERIFY_SCRIPT"
+        ovpn_audit_file M "$OVPN_DROPIN"
         rm -rf -- "$temporary"
         ovpn_print_audit "检查成功"
         return

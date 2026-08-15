@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
-readonly PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-readonly OVPN="$PROJECT_DIR/ovpn.sh"
+PROJECT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
+readonly PROJECT_DIR
+OVPN="$PROJECT_DIR/ovpn.sh"
+readonly OVPN
 export OVPN_NO_AUTO_SUDO=1
 
 fail() { printf 'FAIL: %s\n' "$*" >&2; exit 1; }
@@ -36,6 +38,7 @@ assert_contains "$output" '/usr/local/lib/ovpn'
 [[ -s "$PROJECT_DIR/systemd/ovpn-nat.service" && -s "$PROJECT_DIR/systemd/ovpn.conf" ]] || fail "systemd 资源布局不完整"
 [[ ! -e "$PROJECT_DIR/config/scripts" && ! -e "$PROJECT_DIR/config/network" && ! -e "$PROJECT_DIR/config/systemd.conf" ]] || fail "旧资源布局仍然存在"
 [[ ! -e "$PROJECT_DIR/lib/auth-verify.sh" ]] || fail "OpenVPN 认证脚本不应位于 lib"
+[[ "$(<"$PROJECT_DIR/lib/install.sh")" != *'(( no_backup == 0 && -e'* ]] || fail "uninstall 备份条件把文件测试写进了算术表达式"
 
 output="$($OVPN --dry-run core install)"
 assert_contains "$output" 'apt-get install -y openvpn'
@@ -59,6 +62,8 @@ printf 'client1:!\nclient1:!\n' >"$test_dir/auth-db"
 assert_fails env common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/credentials"
 printf 'client1:unknown\n' >"$test_dir/auth-db"
 assert_fails env common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/credentials"
+# 写入认证数据库的字面 $6$ 前缀。
+# shellcheck disable=SC2016
 printf 'client1:$6$invalid-salt!$hash\n' >"$test_dir/auth-db"
 assert_fails env common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/credentials"
 hash="$(printf '%s\n' secret | openssl passwd -6 -stdin)"
@@ -74,8 +79,12 @@ unset hash
 
 auth_state="$test_dir/auth-state"
 mkdir -p "$auth_state"
+# 写入认证数据库的字面 $6$ 前缀。
+# shellcheck disable=SC2016
 printf 'client1:$6$old$hash\nclient1:$6$duplicate$hash\n' >"$auth_state/auth-db"
 export INSTALL_LOG="$test_dir/auth-install.log"
+# 嵌套 bash -c 字符串内 printf 的 \n，shellcheck 无法解析嵌套引号。
+# shellcheck disable=SC1012
 bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
     source "$1/lib/client.sh"
@@ -160,6 +169,8 @@ output="$(bash -Eeuo pipefail -c '
 ' _ "$PROJECT_DIR" "$test_dir/core-test.conf" 2>&1)"
 [[ -z "$output" ]] || fail "静态配置检查产生意外输出：$output"
 printf 'ca {{CA_CERT}}\n' >"$test_dir/core-test.conf"
+# 嵌套 bash -c 的位置参数 $1/$2。
+# shellcheck disable=SC2016
 assert_fails bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
     source "$1/lib/core.sh"
@@ -217,6 +228,8 @@ printf 'server template\n' >"$editor_state/config/server/default.conf.tpl"
 printf 'client template\n' >"$editor_state/config/client/default.conf.tpl"
 printf 'test client template\n' >"$editor_state/config/client/test.conf.tpl"
 fake_editor="$test_dir/fake-editor"
+# 写入 fake-editor 脚本正文的字面 $1。
+# shellcheck disable=SC2016
 printf '#!/usr/bin/env bash\nprintf "%%s\\n" "$1" >>"$EDITOR_LOG"\n' >"$fake_editor"
 chmod 0755 "$fake_editor"
 output="$(OVPN_EDITOR="$fake_editor" "$OVPN" --dir "$editor_state" --dry-run edit server:default)"
@@ -462,8 +475,9 @@ assert_contains "$output" "$server_state/auth-db"
 mkdir -p "$test_dir/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$test_dir/bin/openvpn"
 chmod 0755 "$test_dir/bin/openvpn"
-output="$(cd "$test_dir" && PATH="$test_dir/bin:$PATH" "$OVPN" --dir "$server_state" --dry-run export client1)"
+output="$(cd "$test_dir" && PATH="$test_dir/bin:$PATH" "$OVPN" --dir "$server_state" --dry-run export client1 2>&1)"
 assert_contains "$output" "$test_dir/client1.ovpn"
+[[ "$output" != *'{{SERVER_PORT}} 出现 0 次'* && "$output" != *'{{SERVER_DEV}} 出现 0 次'* ]] || fail "客户端导出不应警告服务端分区变量"
 if [[ -e "$test_dir/client1.ovpn" ]]; then fail "export dry-run 写入了目标文件"; fi
 output="$($OVPN --dir "$server_state" --dry-run revoke client1)"
 assert_contains "$output" "$server_state/clients/client1"

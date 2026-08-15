@@ -31,7 +31,7 @@ if [[ "$stored_value" == '!' ]]; then
     exit 0
 fi
 
-[[ "$stored_value" == '$6$'* ]] || exit 1
+[[ "$stored_value" == "\$6\$"* ]] || exit 1
 [[ -f "$CREDENTIAL_FILE" && ! -L "$CREDENTIAL_FILE" ]] || exit 1
 IFS= read -r user_name <"$CREDENTIAL_FILE" || exit 1
 IFS= read -r password < <(sed -n '2p' "$CREDENTIAL_FILE") || exit 1
@@ -40,8 +40,8 @@ IFS= read -r password < <(sed -n '2p' "$CREDENTIAL_FILE") || exit 1
 [[ -n "$password" ]] || exit 1
 [[ "$common_name" == "$user_name" ]] || exit 1
 
-salt="${stored_value#'$6$'}"
-salt="${salt%%'$'*}"
+salt="${stored_value#\$6\$}"
+salt="${salt%%\$*}"
 [[ "$salt" =~ ^[./A-Za-z0-9]{1,16}$ ]] || exit 1
 
 calculated_hash="$(

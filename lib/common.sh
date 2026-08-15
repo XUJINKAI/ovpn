@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # ovpn 公共运行时；只由 ovpn.sh 加载。
+# shellcheck disable=SC2034,SC2178  # 常量和 nameref 由 ovpn.sh 加载的其他模块消费，独立检查时看似未使用。
 
 readonly OVPN_INSTALL_PATH="/usr/local/bin/ovpn"
 readonly OVPN_LIB_INSTALL_DIR="/usr/local/lib/ovpn"
