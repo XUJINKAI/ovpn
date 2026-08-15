@@ -66,7 +66,7 @@ ovpn_ca_init() {
     else
         ovpn_audit_file A "$OVPN_STATE_DIR"
     fi
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
 
     ovpn_require_command openssl
     ovpn_require_command openvpn
@@ -106,12 +106,13 @@ ovpn_ca_init() {
         rm -rf -- "$OVPN_STATE_DIR/pki"
         ovpn_die "CA 初始化失败；已清理不完整 PKI，修复后重新运行 ca init"
     fi
-    if (( exists == 1 )); then
-        ovpn_cleanup_backups "$OVPN_STATE_DIR/backup"
-        printf '旧 CA 和客户端备份：%s\n' "$backup"
-    fi
-    printf 'CA 初始化完成；运行 ovpn apply 验证配置、部署运行文件并启动服务。\n'
+    (( exists == 0 )) || ovpn_cleanup_backups "$OVPN_STATE_DIR/backup"
     ovpn_print_audit
+    if [[ -n "$backup" ]]; then
+        ovpn_result "CA 已重新初始化，旧 CA 和客户端备份在 $backup。下一步：ovpn apply"
+    else
+        ovpn_result "CA 已初始化完成。下一步：ovpn apply"
+    fi
 }
 
 ovpn_apply_internal() {
@@ -238,6 +239,7 @@ ovpn_apply() {
         ovpn_audit_file M "$OVPN_DROPIN"
         rm -rf -- "$temporary"
         ovpn_print_audit "检查成功"
+        ovpn_dry_run_result
         return
     fi
     ovpn_info "获取应用锁"
@@ -245,6 +247,7 @@ ovpn_apply() {
     ovpn_info "渲染并验证服务端配置"
     ovpn_apply_internal 0 "$template_name" env_assignments extra_configs 1
     ovpn_print_audit
+    ovpn_result "OpenVPN 运行配置已应用，服务已启用并启动。"
 }
 
 ovpn_status() {

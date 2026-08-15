@@ -24,7 +24,7 @@ ovpn_install() {
     ovpn_audit_file A "$OVPN_STATE_DIR/scripts"
     ovpn_audit_file A "$OVPN_STATE_DIR/network"
     ovpn_audit_file A "$OVPN_STATE_DIR/systemd"
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
 
     config_user="$(ovpn_invoking_user)"
     config_group="$(id -gn "$config_user")"
@@ -78,7 +78,7 @@ ovpn_install() {
     done
     chmod 0755 -- "$OVPN_STATE_DIR/scripts/auth-verify.sh"
     ovpn_print_audit
-    printf '管理器安装完成。下一步：sudo ovpn core install\n'
+    ovpn_result "管理器已安装完成。下一步：sudo ovpn core install"
 }
 
 ovpn_uninstall() {
@@ -114,7 +114,7 @@ ovpn_uninstall() {
             ovpn_audit_file A "$OVPN_PURGE_BACKUP_ROOT/purge-<时间>"
         fi
     fi
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
 
     if (( purge == 1 )); then
         ovpn_confirm PURGE "警告：这会删除 CA、私钥、客户端状态和用户模板。"
@@ -136,5 +136,9 @@ ovpn_uninstall() {
     rm -f -- "$OVPN_INSTALL_PATH"
     rm -rf -- "$OVPN_LIB_INSTALL_DIR"
     ovpn_print_audit
-    [[ -z "$backup_dir" ]] || printf '恢复副本：%s\n' "$backup_dir"
+    if [[ -n "$backup_dir" ]]; then
+        ovpn_result "已卸载完成，备份在 $backup_dir。"
+    else
+        ovpn_result "卸载完成，无备份。"
+    fi
 }

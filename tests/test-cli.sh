@@ -33,6 +33,8 @@ assert_contains "$output" '[--env KEY=VALUE]... [--add-config LINE]...'
 output="$($OVPN --dry-run install --copy)"
 assert_contains "$output" '模式：dry-run'
 assert_contains "$output" '/usr/local/lib/ovpn'
+assert_contains "$output" 'dry-run 检查完成，未执行系统变更。'
+[[ "$output" != *$'\033['* ]] || fail "非终端结果不应包含 ANSI 颜色"
 [[ -x "$PROJECT_DIR/scripts/auth-verify.sh" ]] || fail "OpenVPN 认证脚本缺失或不可执行"
 [[ -s "$PROJECT_DIR/network/nat-client.nft.tpl" && -s "$PROJECT_DIR/network/sysctl.conf" ]] || fail "网络资源布局不完整"
 [[ -s "$PROJECT_DIR/systemd/ovpn-nat.service" && -s "$PROJECT_DIR/systemd/ovpn.conf" ]] || fail "systemd 资源布局不完整"
@@ -241,8 +243,10 @@ assert_contains "$output" "$fake_editor $editor_state/config/client/default.conf
 output="$(OVPN_EDITOR="$fake_editor" "$OVPN" --dir "$editor_state" --dry-run edit client:test)"
 assert_contains "$output" "$fake_editor $editor_state/config/client/test.conf.tpl"
 [[ ! -e "$test_dir/editor.log" ]] || fail "edit dry-run 启动了编辑器"
-EDITOR_LOG="$test_dir/editor.log" OVPN_EDITOR="$fake_editor" "$OVPN" --dir "$editor_state" --no-audit edit env
+output="$(EDITOR_LOG="$test_dir/editor.log" OVPN_EDITOR="$fake_editor" "$OVPN" --dir "$editor_state" --no-audit edit env)"
 [[ "$(<"$test_dir/editor.log")" == "$editor_state/config/ovpn.env" ]] || fail "edit env 没有打开环境文件"
+[[ -z "$output" ]] || fail "edit --no-audit 产生意外输出：$output"
+[[ "$output" != *'审计：'* && "$output" != *'执行审计：'* ]] || fail "--no-audit 仍显示审计摘要"
 assert_fails "$OVPN" --dir "$editor_state" --dry-run edit server:missing
 assert_fails "$OVPN" --dir "$editor_state" --dry-run edit 'client:../default'
 
@@ -482,7 +486,7 @@ if [[ -e "$test_dir/client1.ovpn" ]]; then fail "export dry-run 写入了目标�
 output="$($OVPN --dir "$server_state" --dry-run revoke client1)"
 assert_contains "$output" "$server_state/clients/client1"
 output="$($OVPN --dir "$server_state" --dry-run network nat_client enable)"
-assert_contains "$output" '客户端 NAT 网段：10.9.0.0/24'
+assert_contains "$output" 'dry-run 检查完成，未执行系统变更。'
 
 old_state="$test_dir/old-state"
 old_tmp="$test_dir/old-tmp"

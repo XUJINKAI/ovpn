@@ -32,6 +32,16 @@ ovpn_die() { printf '错误：%s\n' "$*" >&2; exit 1; }
 ovpn_info() { printf '==> %s\n' "$*"; }
 ovpn_have() { command -v "$1" >/dev/null 2>&1; }
 
+ovpn_result() {
+    if [[ -t 1 && "${TERM:-dumb}" != dumb && -z "${NO_COLOR:-}" ]]; then
+        printf '\033[32m%s\033[0m\n' "$*"
+    else
+        printf '%s\n' "$*"
+    fi
+}
+
+ovpn_dry_run_result() { ovpn_result "dry-run 检查完成，未执行系统变更。"; }
+
 ovpn_register_temp() { OVPN_TEMP_PATHS+=("$1"); }
 
 ovpn_cleanup_temporaries() {
@@ -146,7 +156,7 @@ ovpn_edit() {
     ovpn_safe_regular_file "$file"
     ovpn_audit_command "$editor" "$file"
     ovpn_audit_file M "$file"
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
     "$editor" "$file"
     ovpn_print_audit
 }

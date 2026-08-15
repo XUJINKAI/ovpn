@@ -86,7 +86,7 @@ ovpn_render_nat_rules() {
 }
 
 ovpn_network_ipv4_forward() {
-    local action="$1" temporary had_old=0
+    local action="$1" temporary had_old=0 effective="无法读取"
     ovpn_require_root
     ovpn_require_command sysctl
     case "$action" in
@@ -125,6 +125,16 @@ ovpn_network_ipv4_forward() {
         *) ovpn_die "用法：ovpn network ipv4_forward enable|disable" ;;
     esac
     ovpn_print_audit
+    if [[ "$OVPN_DRY_RUN" == 1 ]]; then
+        ovpn_dry_run_result
+        return
+    fi
+    [[ ! -r /proc/sys/net/ipv4/ip_forward ]] || effective="$(< /proc/sys/net/ipv4/ip_forward)"
+    if [[ "$action" == enable ]]; then
+        ovpn_result "已开启 IPv4 转发；cat /proc/sys/net/ipv4/ip_forward 输出：$effective"
+    else
+        ovpn_result "已移除 ovpn 的 IPv4 转发配置；cat /proc/sys/net/ipv4/ip_forward 输出：$effective"
+    fi
 }
 
 ovpn_network_nat_client() {
@@ -167,7 +177,6 @@ ovpn_network_nat_client() {
                 fi
                 rm -rf -- "$temporary"
             fi
-            printf '客户端 NAT 网段：%s\n' "$cidr"
             ;;
         disable)
             ovpn_audit_command systemctl disable --now "$OVPN_NAT_SERVICE"
@@ -185,6 +194,13 @@ ovpn_network_nat_client() {
         *) ovpn_die "用法：ovpn network nat_client enable|disable" ;;
     esac
     ovpn_print_audit
+    if [[ "$OVPN_DRY_RUN" == 1 ]]; then
+        ovpn_dry_run_result
+    elif [[ "$action" == enable ]]; then
+        ovpn_result "已启用客户端 NAT，VPN 网段为 $cidr。"
+    else
+        ovpn_result "已禁用客户端 NAT。"
+    fi
 }
 
 ovpn_network() {

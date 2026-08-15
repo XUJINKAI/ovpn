@@ -10,9 +10,10 @@ ovpn_core() {
             ovpn_require_root
             local -a packages=(openvpn easy-rsa openssl nftables acl util-linux)
             ovpn_audit_command apt-get install -y "${packages[@]}"
-            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
             DEBIAN_FRONTEND=noninteractive apt-get install -y "${packages[@]}"
             ovpn_print_audit
+            ovpn_result "OpenVPN 及运行依赖已安装完成。"
             ;;
         test)
             (( $# == 0 )) || ovpn_die "core test 不接受参数"
@@ -24,7 +25,7 @@ ovpn_core() {
             ovpn_require_root
             ovpn_core_test
             ovpn_audit_command systemctl "$command" "$OVPN_SERVICE"
-            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
             if ! systemctl "$command" "$OVPN_SERVICE"; then
                 ovpn_audit_command systemctl stop "$OVPN_SERVICE"
                 systemctl stop "$OVPN_SERVICE" >/dev/null 2>&1 || true
@@ -34,14 +35,20 @@ ovpn_core() {
                 ovpn_die "OpenVPN $command 失败；已停止自动重试，请根据以上日志修正配置后重新运行 ovpn apply"
             fi
             ovpn_print_audit
+            if [[ "$command" == start ]]; then
+                ovpn_result "OpenVPN 服务已启动。"
+            else
+                ovpn_result "OpenVPN 服务已重启。"
+            fi
             ;;
         stop)
             (( $# == 0 )) || ovpn_die "core stop 不接受参数"
             ovpn_require_root
             ovpn_audit_command systemctl stop "$OVPN_SERVICE"
-            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
             systemctl stop "$OVPN_SERVICE"
             ovpn_print_audit
+            ovpn_result "OpenVPN 服务已停止。"
             ;;
         logs)
             local follow=0
@@ -55,7 +62,7 @@ ovpn_core() {
             local -a journal_args=(-u "$OVPN_SERVICE" -n 100 --no-pager)
             (( follow == 0 )) || journal_args+=(-f)
             ovpn_audit_command journalctl "${journal_args[@]}"
-            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+            [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
             if (( follow == 1 )); then
                 ovpn_print_audit
                 journalctl "${journal_args[@]}"

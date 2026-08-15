@@ -54,13 +54,14 @@ ovpn_client_add() {
     ovpn_require_initialized
     [[ ! -e "$OVPN_STATE_DIR/clients/$name" ]] || ovpn_die "客户端已存在：$name"
     ovpn_audit_file A "$OVPN_STATE_DIR/clients/$name"
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
     hash="$(ovpn_password_hash "$no_passwd")"
     ovpn_lock
     ovpn_pki_sign_client "$name" "$days"
     ovpn_auth_update "$name" "$hash"
     unset hash
     ovpn_print_audit
+    ovpn_result "客户端 $name 已创建完成。"
 }
 
 ovpn_client_passwd() {
@@ -72,10 +73,15 @@ ovpn_client_passwd() {
     [[ -s "$OVPN_STATE_DIR/pki/issued/$name.crt" && -d "$OVPN_STATE_DIR/clients/$name" ]] || ovpn_die "客户端不存在：$name"
     ovpn_require_root
     ovpn_audit_file M "$OVPN_STATE_DIR/auth-db"
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
     ovpn_lock
     ovpn_password_update "$name" "$no_passwd"
     ovpn_print_audit
+    if (( no_passwd == 1 )); then
+        ovpn_result "客户端 $name 已设为仅证书认证。"
+    else
+        ovpn_result "客户端 $name 的口令认证设置已更新。"
+    fi
 }
 
 ovpn_inline_block() {
@@ -173,12 +179,12 @@ ovpn_client_export() {
         ovpn_die "客户端模板包含未定义环境变量：$template"
     fi
     ovpn_core_test_file "$rendered"
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { rm -rf -- "$temporary"; ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { rm -rf -- "$temporary"; ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
     if [[ -e "$output" && $force == 0 ]] && ! cmp -s -- "$rendered" "$output"; then ovpn_die "目标已存在；使用 --force 覆盖：$output"; fi
     ovpn_atomic_install "$rendered" "$output" 0600 "$user" "$user"
     rm -rf -- "$temporary"
     ovpn_print_audit
-    printf '已导出：%s（模板：%s）\n' "$output" "$template_name"
+    ovpn_result "客户端 $name 已导出到 $output（模板：$template_name）。"
 }
 
 ovpn_client_revoke() {
@@ -188,13 +194,14 @@ ovpn_client_revoke() {
     [[ -s "$OVPN_STATE_DIR/pki/issued/$name.crt" && -d "$OVPN_STATE_DIR/clients/$name" ]] || ovpn_die "客户端不存在：$name"
     ovpn_require_root
     ovpn_audit_file D "$OVPN_STATE_DIR/clients/$name"
-    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; return; }
+    [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
     ovpn_lock
     ovpn_pki_revoke_client "$name"
     ovpn_auth_update "$name"
     rm -rf -- "$OVPN_STATE_DIR/clients/$name"
     ovpn_apply_internal 1
     ovpn_print_audit
+    ovpn_result "客户端 $name 已吊销，CRL 和运行配置已更新。"
 }
 
 ovpn_client_ls() {
