@@ -26,8 +26,8 @@ script-security 2
 auth-user-pass-verify {{AUTH_VERIFY_SCRIPT}} via-file
 auth-user-pass-optional
 setenv OVPN_AUTH_DB {{AUTH_DB}}
-client-connect {{CLIENT_EVENT_SCRIPT}} connect
-client-disconnect {{CLIENT_EVENT_SCRIPT}} disconnect
+client-connect {{CLIENT_EVENT_SCRIPT}}
+client-disconnect {{CLIENT_EVENT_SCRIPT}}
 
 max-clients {{MAX_CLIENTS}}
 

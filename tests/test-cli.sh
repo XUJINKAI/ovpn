@@ -107,8 +107,8 @@ assert_fails env common_name=invalid/name OVPN_AUTH_DB="$test_dir/auth-db" "$aut
 unset hash
 
 cp -- "$event_hooks/authentication-failed" "$event_hooks/client-connected"
-env common_name=client1 trusted_ip=192.0.2.30 trusted_port=1194 ifconfig_pool_remote_ip=10.8.0.2 \
-    "$test_dir/client-event.sh" connect "$test_dir/client-config"
+env script_type=client-connect common_name=client1 trusted_ip=192.0.2.30 trusted_port=1194 ifconfig_pool_remote_ip=10.8.0.2 \
+    "$test_dir/client-event.sh" "$test_dir/client-config"
 assert_contains "$(<"$event_log")" 'OVPN_EVENT=client-connected'
 assert_contains "$(<"$event_log")" 'OVPN_REMOTE_IP=192.0.2.30'
 assert_contains "$(<"$event_log")" 'OVPN_IFCONFIG_POOL_REMOTE_IP=10.8.0.2'
@@ -410,7 +410,7 @@ assert_contains "$(<"$test_dir/server.conf")" 'crl-verify /etc/openvpn/server/cr
 assert_contains "$(<"$test_dir/server.conf")" 'tls-crypt-v2 /etc/openvpn/server/tls-crypt-v2.key'
 assert_contains "$(<"$test_dir/server.conf")" 'auth-user-pass-verify /etc/openvpn/server/auth-verify.sh via-file'
 assert_contains "$(<"$PROJECT_DIR/config/server/default.conf.tpl")" 'max-clients {{MAX_CLIENTS}}'
-assert_contains "$(<"$PROJECT_DIR/config/server/default.conf.tpl")" 'client-connect {{CLIENT_EVENT_SCRIPT}} connect'
+assert_contains "$(<"$PROJECT_DIR/config/server/default.conf.tpl")" 'client-connect {{CLIENT_EVENT_SCRIPT}}'
 assert_fails bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
     source "$1/lib/server.sh"

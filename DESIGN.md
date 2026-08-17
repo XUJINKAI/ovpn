@@ -304,8 +304,8 @@ ovpn 不提供每身份连接上限；模板未启用`duplicate-cn`时使用 Ope
 ```conf
 script-security 2
 auth-user-pass-verify {{AUTH_VERIFY_SCRIPT}} via-file
-client-connect {{CLIENT_EVENT_SCRIPT}} connect
-client-disconnect {{CLIENT_EVENT_SCRIPT}} disconnect
+client-connect {{CLIENT_EVENT_SCRIPT}}
+client-disconnect {{CLIENT_EVENT_SCRIPT}}
 ```
 
 `script-security 2`允许 OpenVPN 执行外部脚本。
@@ -314,9 +314,9 @@ client-disconnect {{CLIENT_EVENT_SCRIPT}} disconnect
 该事件只覆盖受管`auth-user-pass-verify`拒绝，不覆盖证书无效或吊销、TLS 握手失败、tls-crypt-v2 拒绝以及`max-clients`拒绝；这些早期失败没有统一稳定的 OpenVPN 脚本回调，ovpn 不解析面向人的 journal 文本来伪造结构化事件。
 认证尚未成功时使用 OpenVPN 提供的`untrusted_ip`或`untrusted_ip6`及`untrusted_port`作为来源字段；这里的 untrusted 表示身份尚未完成认证，字段只用于通知，不作为授权依据。
 
-`client-connect`在客户端通过证书和可选密码认证、连接即将建立时执行`client-event.sh connect`。
+`client-connect`在客户端通过证书和可选密码认证、连接即将建立时执行`client-event.sh`；脚本通过 OpenVPN 提供的`script_type=client-connect`环境变量识别事件。
 OpenVPN 通过环境变量提供 CN、可信来源地址和端口、分配的虚拟地址等连接字段，并把用于返回动态客户端配置的临时文件路径作为最后一个参数传入；`client-event.sh`不向该文件写配置，只筛选事件字段并调用`event-dispatch.sh client-connected`，随后返回成功。
-`client-disconnect`在已经建立的客户端实例结束时执行`client-event.sh disconnect`。
+`client-disconnect`在已经建立的客户端实例结束时执行`client-event.sh`；脚本通过 OpenVPN 提供的`script_type=client-disconnect`环境变量识别事件。
 OpenVPN 通过环境变量提供 CN、可信来源、虚拟地址、连接时长和收发字节等可用字段，并在命令末尾追加对端地址和端口；`client-event.sh`只筛选字段并调用`event-dispatch.sh client-disconnected`，不维护持久或易失会话状态。
 
 完整调用关系如下：
@@ -331,18 +331,18 @@ OpenVPN
 
 连接：
 OpenVPN
-    -> client-event.sh connect
+    -> client-event.sh (script_type=client-connect)
         -> event-dispatch.sh client-connected
             -> hooks/client-connected
 
 断开：
 OpenVPN
-    -> client-event.sh disconnect
+    -> client-event.sh (script_type=client-disconnect)
         -> event-dispatch.sh client-disconnected
             -> hooks/client-disconnected
 ```
 
-`client-event.sh`只适配 OpenVPN 的`client-connect`和`client-disconnect`两种调用约定，把原始参数和环境转换为统一的非敏感事件字段。
+`client-event.sh`只适配 OpenVPN 的`client-connect`和`client-disconnect`两种调用约定，通过`script_type`环境变量识别事件，把原始参数和环境转换为统一的非敏感事件字段。
 `event-dispatch.sh`是认证与连接脚本共用的内部执行层，不直接写入 OpenVPN 配置；它根据固定事件名查找并调用用户 hook，统一执行字段白名单、超时、日志和失败隔离。
 
 支持以下固定事件：

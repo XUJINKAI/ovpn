@@ -133,7 +133,7 @@ sudo chmod 0755 /etc/openvpn/server/event-dispatch.sh
 sudo tee /etc/openvpn/server/client-event.sh >/dev/null <<'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-case "${1:-}" in connect) event=client-connected ;; disconnect) event=client-disconnected ;; *) exit 0 ;; esac
+case "${script_type:-}" in client-connect) event=client-connected ;; client-disconnect) event=client-disconnected ;; *) exit 0 ;; esac
 export OVPN_COMMON_NAME="${common_name:-}"
 export OVPN_REMOTE_IP="${trusted_ip:-${trusted_ip6:-}}"
 export OVPN_REMOTE_PORT="${trusted_port:-}"
@@ -186,8 +186,8 @@ script-security 2
 auth-user-pass-verify /etc/openvpn/server/auth-verify.sh via-file
 auth-user-pass-optional
 setenv OVPN_AUTH_DB /etc/openvpn/manual/auth-db
-client-connect /etc/openvpn/server/client-event.sh connect
-client-disconnect /etc/openvpn/server/client-event.sh disconnect
+client-connect /etc/openvpn/server/client-event.sh
+client-disconnect /etc/openvpn/server/client-event.sh
 max-clients 100
 keepalive 10 120
 persist-key

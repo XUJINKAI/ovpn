@@ -333,7 +333,7 @@ ovpn_status() {
 
 ovpn_connection_limit_summary() {
     local config="$1" max_clients="未配置" duplicate_cn="禁用（同 CN 新连接替换旧连接）" result
-    if [[ -f "$config" && ! -L "$config" ]]; then
+    if [[ -f "$config" && ! -L "$config" && -r "$config" ]]; then
         result="$(awk '
             /^[[:space:]]*[#;]/ { next }
             $1 == "max-clients" { count++; value=$2; if (NF != 2) invalid=1 }

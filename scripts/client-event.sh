@@ -4,11 +4,11 @@
 set -Eeuo pipefail
 
 readonly DISPATCHER="/etc/openvpn/server/event-dispatch.sh"
-readonly MODE="${1:-}"
+readonly SCRIPT_TYPE="${script_type:-}"
 
-case "$MODE" in
-    connect) event=client-connected ;;
-    disconnect) event=client-disconnected ;;
+case "$SCRIPT_TYPE" in
+    client-connect) event=client-connected ;;
+    client-disconnect) event=client-disconnected ;;
     *) exit 0 ;;
 esac
 

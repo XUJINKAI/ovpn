@@ -98,8 +98,8 @@ ovpn_core_test_file() {
             ovpn_die "OpenVPN 认证脚本权限错误；请重新运行 ovpn apply"
         fi
     fi
-    if grep -Fq "client-connect $OVPN_CLIENT_EVENT_SCRIPT connect" "$config" ||
-        grep -Fq "client-disconnect $OVPN_CLIENT_EVENT_SCRIPT disconnect" "$config"; then
+    if grep -Fq "client-connect $OVPN_CLIENT_EVENT_SCRIPT" "$config" ||
+        grep -Fq "client-disconnect $OVPN_CLIENT_EVENT_SCRIPT" "$config"; then
         needs_dispatcher=1
         ovpn_audit_command test -x "$OVPN_CLIENT_EVENT_SCRIPT"
         hook="${client_candidate:-$OVPN_CLIENT_EVENT_SCRIPT}"
