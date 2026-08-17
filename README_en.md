@@ -2,7 +2,7 @@
 
 [中文说明](README.md)
 
-A lightweight OpenVPN manager. The commands are simple. Password authentication and configuration templates are built in.
+A lightweight, easy-to-use OpenVPN manager with password authentication, configuration templates, and connection event hooks.
 
 - Deploy OpenVPN quickly
 - Use client certificates, with optional passwords
@@ -11,6 +11,7 @@ A lightweight OpenVPN manager. The commands are simple. Password authentication 
 - Override template variables from the command line
 - Append temporary OpenVPN options from the command line
 - Set up IP forwarding and VPN client NAT
+- Run custom hooks when clients connect, disconnect, or fail password authentication
 - Preview and audit changes with `--dry-run`
 
 ## Quick Start
@@ -76,6 +77,12 @@ ovpn edit client:default  # Same as the command above
 ovpn edit server:test     # Open the existing server template named test
 ```
 
+## Event Hooks
+
+The [hooks](config/hooks) directory includes three editable examples: client connected, client disconnected, and password authentication failed. A hook failure or timeout does not affect client authentication or connectivity.
+
+The authentication failure hook only covers the password login stage. Earlier failures, such as TLS handshake or certificate validation errors, do not trigger it and must be investigated in the service logs.
+
 ## Command Reference
 
 ### Install and Maintain
@@ -92,6 +99,7 @@ ovpn uninstall [--purge] [--no-backup]  # Keep managed data by default
 
 ```bash
 ovpn ca init [--days DAYS] [--force]  # Create the CA and server credentials; --force invalidates all clients
+ovpn edit env|server[:NAME]|client[:NAME]  # Edit the environment file or an existing template
 ovpn apply [--template NAME]          # Deploy runtime files and start the service
            [--env KEY=VALUE]...
            [--add-config LINE]...

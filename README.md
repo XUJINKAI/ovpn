@@ -2,14 +2,14 @@
 
 [English README](README_en.md)
 
-轻量 OpenVPN 管理工具，命令简洁，支持口令验证，支持模板配置。
+轻量易用的 OpenVPN 管理工具，支持口令验证、模板配置和连接事件回调。
 
 - 快速部署 OpenVPN
 - 客户端证书认证，可额外设置口令验证
 - 自动管理本地 CA，一键重置本地 CA
 - 客户端和服务端配置支持多模板切换
 - 支持命令行临时覆盖模板变量和追加配置
-- 附带网络配置工具，快速设置IP转发和VPN NAT
+- 附带网络配置工具，快速设置 IP 转发和 VPN NAT
 - 支持 `--dry-run` 审计
 
 ## 快速开始
@@ -17,7 +17,7 @@
 ```bash
 # 安装以及初始化 CA
 ./ovpn.sh install --copy    # 安装管理器
-ovpn core install           # 安装 Open VPN、easy-rsa 等依赖
+ovpn core install           # 安装 OpenVPN、Easy-RSA 等依赖
 ovpn ca init                # 初始化 CA 并生成服务端证书
 
 # 应用配置并启动
@@ -63,7 +63,7 @@ SERVER_PORT=1194
 remote {{ENDPOINT}} {{CLIENT_PORT}}
 ```
 
-服务端 apply 或 客户端 export 配置时，可以使用 `--env KEY=VALUE`临时覆盖变量。
+执行服务端 `apply` 或客户端 `export` 时，可以使用 `--env KEY=VALUE` 临时覆盖变量。
 
 以下命令可以打开环境文件或已有模板，默认使用`vi`，也可以通过`OVPN_EDITOR`切换编辑器：
 
@@ -74,6 +74,12 @@ ovpn edit client          # 打开客户端 default 模板
 ovpn edit client:default  # 与上一条命令等价
 ovpn edit server:test     # 打开已有的服务端 test 模板
 ```
+
+## 事件回调
+
+[hooks](config/hooks) 中提供了三个可直接编辑的回调示例：客户端连接、客户端断开和口令认证失败。回调失败或超时不会影响客户端的认证和连接。
+
+口令认证失败回调只覆盖口令登录阶段。TLS 握手、证书验证等更早发生的失败不会触发该回调，需要通过服务日志排查。
 
 ## 命令列表
 
@@ -91,6 +97,7 @@ ovpn uninstall [--purge] [--no-backup]  # 默认保留管理数据
 
 ```bash
 ovpn ca init [--days DAYS] [--force]  # 初始化 CA 和服务端凭据；--force 会使现有客户端失效
+ovpn edit env|server[:NAME]|client[:NAME]  # 编辑环境文件或已有模板
 ovpn apply [--template NAME]          # 部署运行文件并启动服务
            [--env KEY=VALUE]...
            [--add-config LINE]...
