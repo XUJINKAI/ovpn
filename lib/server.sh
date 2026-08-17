@@ -17,6 +17,7 @@ ovpn_render_server() {
         key="${assignment%%=*}"
         env_values["$key"]="${assignment#*=}"
     done
+    [[ "${env_values[MAX_CLIENTS]:-}" =~ ^[1-9][0-9]*$ ]] || ovpn_die "MAX_CLIENTS 必须是大于零的十进制整数"
     appended="$output.appended"
     ovpn_render_append_config "$template" "$appended" "$configs_name" "服务端"
     mv -- "$appended" "$output"
@@ -28,8 +29,67 @@ ovpn_render_server() {
         CRL_FILE "$OVPN_RUNTIME_CRL" \
         TLS_CRYPT_V2_SERVER_KEY "$OVPN_RUNTIME_TLS_CRYPT_V2" \
         AUTH_VERIFY_SCRIPT "$OVPN_AUTH_VERIFY_SCRIPT" \
+        CLIENT_EVENT_SCRIPT "$OVPN_CLIENT_EVENT_SCRIPT" \
         AUTH_DB "$OVPN_STATE_DIR/auth-db"
     mv -- "$output.paths" "$output"
+}
+
+ovpn_prepare_event_resources() {
+    local candidate="$1" name source
+    install -d -m 0755 -- "$candidate/hooks"
+    for name in auth-verify.sh client-event.sh event-dispatch.sh; do
+        source="$OVPN_RESOURCE_DIR/scripts/$name"
+        ovpn_safe_regular_file "$source"
+        install -m 0755 -- "$source" "$candidate/$name"
+    done
+    for name in authentication-failed client-connected client-disconnected; do
+        source="$OVPN_RESOURCE_DIR/config/hooks/$name"
+        if [[ -e "$source" || -L "$source" ]]; then
+            [[ -f "$source" && ! -L "$source" && -x "$source" ]] ||
+                ovpn_die "事件回调必须是非符号链接普通可执行文件：$source"
+            install -m 0750 -- "$source" "$candidate/hooks/$name"
+        fi
+    done
+}
+
+ovpn_event_resources_match() {
+    local candidate="$1" name
+    cmp -s -- "$candidate/auth-verify.sh" "$OVPN_AUTH_VERIFY_SCRIPT" || return 1
+    cmp -s -- "$candidate/client-event.sh" "$OVPN_CLIENT_EVENT_SCRIPT" || return 1
+    cmp -s -- "$candidate/event-dispatch.sh" "$OVPN_EVENT_DISPATCH_SCRIPT" || return 1
+    [[ ! -L "$OVPN_AUTH_VERIFY_SCRIPT" && "$(stat -c '%U:%G:%a' "$OVPN_AUTH_VERIFY_SCRIPT")" == root:root:755 ]] || return 1
+    [[ ! -L "$OVPN_CLIENT_EVENT_SCRIPT" && "$(stat -c '%U:%G:%a' "$OVPN_CLIENT_EVENT_SCRIPT")" == root:root:755 ]] || return 1
+    [[ ! -L "$OVPN_EVENT_DISPATCH_SCRIPT" && "$(stat -c '%U:%G:%a' "$OVPN_EVENT_DISPATCH_SCRIPT")" == root:root:755 ]] || return 1
+    [[ -d "$OVPN_RUNTIME_HOOK_DIR" && ! -L "$OVPN_RUNTIME_HOOK_DIR" && "$(stat -c '%U:%G:%a' "$OVPN_RUNTIME_HOOK_DIR")" == root:nogroup:750 ]] || return 1
+    for name in authentication-failed client-connected client-disconnected; do
+        if [[ -e "$candidate/hooks/$name" ]]; then
+            cmp -s -- "$candidate/hooks/$name" "$OVPN_RUNTIME_HOOK_DIR/$name" || return 1
+            [[ -f "$OVPN_RUNTIME_HOOK_DIR/$name" && ! -L "$OVPN_RUNTIME_HOOK_DIR/$name" &&
+                "$(stat -c '%U:%G:%a' "$OVPN_RUNTIME_HOOK_DIR/$name")" == root:nogroup:750 ]] || return 1
+        elif [[ -e "$OVPN_RUNTIME_HOOK_DIR/$name" || -L "$OVPN_RUNTIME_HOOK_DIR/$name" ]]; then
+            return 1
+        fi
+    done
+}
+
+ovpn_audit_event_resources() {
+    local candidate="$1" name runtime event
+    [[ -d "$OVPN_RUNTIME_HOOK_DIR" && ! -L "$OVPN_RUNTIME_HOOK_DIR" ]] && event=M || event=A
+    ovpn_audit_file "$event" "$OVPN_RUNTIME_HOOK_DIR"
+    for name in auth-verify.sh client-event.sh event-dispatch.sh; do
+        runtime="$OVPN_SERVER_DIR/$name"
+        [[ -e "$runtime" || -L "$runtime" ]] && event=M || event=A
+        ovpn_audit_file "$event" "$runtime"
+    done
+    for name in authentication-failed client-connected client-disconnected; do
+        runtime="$OVPN_RUNTIME_HOOK_DIR/$name"
+        if [[ -e "$candidate/hooks/$name" ]]; then
+            [[ -e "$runtime" || -L "$runtime" ]] && event=M || event=A
+            ovpn_audit_file "$event" "$runtime"
+        elif [[ -e "$runtime" || -L "$runtime" ]]; then
+            ovpn_audit_file D "$runtime"
+        fi
+    done
 }
 
 ovpn_build_ca() {
@@ -122,20 +182,19 @@ ovpn_apply_internal() {
     ovpn_register_temp "$temporary"
     rendered="$temporary/server.conf"
     ovpn_render_server "$rendered" "$template_name" "$assignments_name" "$configs_name"
-    ovpn_safe_regular_file "$OVPN_RESOURCE_DIR/scripts/auth-verify.sh"
-    install -o root -g root -m 0755 -- "$OVPN_RESOURCE_DIR/scripts/auth-verify.sh" "$temporary/auth-verify.sh"
+    ovpn_prepare_event_resources "$temporary"
     install -o root -g root -m 0644 -- "$OVPN_STATE_DIR/pki/ca-chain.crt" "$temporary/ca.crt"
     install -o root -g root -m 0644 -- "$OVPN_STATE_DIR/pki/issued/server-chain.crt" "$temporary/server.crt"
     install -o root -g root -m 0600 -- "$OVPN_STATE_DIR/pki/private/server.key" "$temporary/server.key"
     install -o root -g root -m 0644 -- "$OVPN_STATE_DIR/pki/crl.pem" "$temporary/crl.pem"
     install -o root -g root -m 0600 -- "$OVPN_STATE_DIR/pki/tls-crypt-v2-server.key" "$temporary/tls-crypt-v2.key"
     ovpn_info "校验 OpenVPN 候选配置"
-    ovpn_core_test_file "$rendered" "$temporary/auth-verify.sh"
+    ovpn_core_test_file "$rendered" "$temporary/auth-verify.sh" "$temporary/client-event.sh" "$temporary/event-dispatch.sh" "$temporary/hooks"
     if (( force_apply == 0 )) && [[ -f "$OVPN_SERVER_CONF" && -f "$OVPN_DROPIN" ]] &&
         cmp -s -- "$rendered" "$OVPN_SERVER_CONF" && cmp -s -- "$OVPN_RESOURCE_DIR/systemd/ovpn.conf" "$OVPN_DROPIN" &&
         cmp -s -- "$temporary/ca.crt" "$OVPN_RUNTIME_CA" && cmp -s -- "$temporary/server.crt" "$OVPN_RUNTIME_SERVER_CERT" &&
         cmp -s -- "$temporary/server.key" "$OVPN_RUNTIME_SERVER_KEY" && cmp -s -- "$temporary/tls-crypt-v2.key" "$OVPN_RUNTIME_TLS_CRYPT_V2" &&
-        cmp -s -- "$temporary/auth-verify.sh" "$OVPN_AUTH_VERIFY_SCRIPT" && cmp -s -- "$temporary/crl.pem" "$OVPN_RUNTIME_CRL"; then
+        ovpn_event_resources_match "$temporary" && cmp -s -- "$temporary/crl.pem" "$OVPN_RUNTIME_CRL"; then
         rm -rf -- "$temporary"
         ovpn_info "运行配置没有变化"
         if (( activate == 1 )); then
@@ -146,6 +205,7 @@ ovpn_apply_internal() {
         return
     fi
     ovpn_info "部署 OpenVPN 运行配置"
+    ovpn_audit_event_resources "$temporary"
     systemctl is-active --quiet "$OVPN_SERVICE" && was_active=1
     systemctl is-enabled --quiet "$OVPN_SERVICE" && was_enabled=1
     backup="$temporary/backup"
@@ -153,6 +213,7 @@ ovpn_apply_internal() {
     [[ ! -d "$OVPN_SERVER_DIR" ]] || cp -a -- "$OVPN_SERVER_DIR" "$backup/server"
     [[ ! -e "$OVPN_DROPIN" ]] || { install -d -- "$backup/dropin"; cp -a -- "$OVPN_DROPIN" "$backup/dropin/ovpn.conf"; }
     install -d -o root -g root -m 0755 -- "$OVPN_SERVER_DIR" "$(dirname -- "$OVPN_AUTH_VERIFY_SCRIPT")" "$(dirname -- "$OVPN_DROPIN")"
+    install -d -o root -g nogroup -m 0750 -- "$OVPN_RUNTIME_HOOK_DIR"
     install -o root -g root -m 0600 -- "$rendered" "$OVPN_SERVER_CONF"
     install -o root -g root -m 0644 -- "$temporary/ca.crt" "$OVPN_RUNTIME_CA"
     install -o root -g root -m 0644 -- "$temporary/server.crt" "$OVPN_RUNTIME_SERVER_CERT"
@@ -160,6 +221,14 @@ ovpn_apply_internal() {
     install -o root -g root -m 0644 -- "$temporary/crl.pem" "$OVPN_RUNTIME_CRL"
     install -o root -g root -m 0600 -- "$temporary/tls-crypt-v2.key" "$OVPN_RUNTIME_TLS_CRYPT_V2"
     install -o root -g root -m 0755 -- "$temporary/auth-verify.sh" "$OVPN_AUTH_VERIFY_SCRIPT"
+    install -o root -g root -m 0755 -- "$temporary/client-event.sh" "$OVPN_CLIENT_EVENT_SCRIPT"
+    install -o root -g root -m 0755 -- "$temporary/event-dispatch.sh" "$OVPN_EVENT_DISPATCH_SCRIPT"
+    local hook_name
+    for hook_name in authentication-failed client-connected client-disconnected; do
+        rm -f -- "$OVPN_RUNTIME_HOOK_DIR/$hook_name"
+        [[ ! -e "$temporary/hooks/$hook_name" ]] ||
+            install -o root -g nogroup -m 0750 -- "$temporary/hooks/$hook_name" "$OVPN_RUNTIME_HOOK_DIR/$hook_name"
+    done
     install -o root -g root -m 0644 -- "$OVPN_RESOURCE_DIR/systemd/ovpn.conf" "$OVPN_DROPIN"
     ovpn_audit_command systemctl daemon-reload
     systemctl daemon-reload
@@ -178,7 +247,8 @@ ovpn_apply_internal() {
         systemctl enable --now "$OVPN_SERVICE" || service_failed=1
     fi
     if (( service_failed == 1 )); then
-        rm -f -- "$OVPN_SERVER_CONF" "$OVPN_RUNTIME_CA" "$OVPN_RUNTIME_SERVER_CERT" "$OVPN_RUNTIME_SERVER_KEY" "$OVPN_RUNTIME_CRL" "$OVPN_RUNTIME_TLS_CRYPT_V2" "$OVPN_AUTH_VERIFY_SCRIPT"
+        rm -f -- "$OVPN_SERVER_CONF" "$OVPN_RUNTIME_CA" "$OVPN_RUNTIME_SERVER_CERT" "$OVPN_RUNTIME_SERVER_KEY" "$OVPN_RUNTIME_CRL" "$OVPN_RUNTIME_TLS_CRYPT_V2" "$OVPN_AUTH_VERIFY_SCRIPT" "$OVPN_CLIENT_EVENT_SCRIPT" "$OVPN_EVENT_DISPATCH_SCRIPT"
+        rm -f -- "$OVPN_RUNTIME_HOOK_DIR/authentication-failed" "$OVPN_RUNTIME_HOOK_DIR/client-connected" "$OVPN_RUNTIME_HOOK_DIR/client-disconnected"
         [[ ! -d "$backup/server" ]] || cp -a -- "$backup/server"/. "$OVPN_SERVER_DIR"/
         rm -f -- "$OVPN_DROPIN"
         [[ ! -e "$backup/dropin/ovpn.conf" ]] || cp -a -- "$backup/dropin/ovpn.conf" "$OVPN_DROPIN"
@@ -194,7 +264,6 @@ ovpn_apply_internal() {
     ovpn_audit_file M "$OVPN_RUNTIME_SERVER_KEY"
     ovpn_audit_file M "$OVPN_RUNTIME_CRL"
     ovpn_audit_file M "$OVPN_RUNTIME_TLS_CRYPT_V2"
-    ovpn_audit_file M "$OVPN_AUTH_VERIFY_SCRIPT"
     ovpn_audit_file M "$OVPN_DROPIN"
     rm -rf -- "$temporary"
 }
@@ -222,11 +291,11 @@ ovpn_apply() {
         temporary="$(mktemp -d)"
         ovpn_register_temp "$temporary"
         ovpn_render_server "$temporary/server.conf" "$template_name" env_assignments extra_configs
-        ovpn_safe_regular_file "$OVPN_RESOURCE_DIR/scripts/auth-verify.sh"
-        install -m 0755 -- "$OVPN_RESOURCE_DIR/scripts/auth-verify.sh" "$temporary/auth-verify.sh"
+        ovpn_prepare_event_resources "$temporary"
         ovpn_safe_regular_file "$OVPN_STATE_DIR/pki/crl.pem"
         install -m 0644 -- "$OVPN_STATE_DIR/pki/crl.pem" "$temporary/crl.pem"
-        ovpn_core_test_file "$temporary/server.conf" "$temporary/auth-verify.sh"
+        ovpn_core_test_file "$temporary/server.conf" "$temporary/auth-verify.sh" "$temporary/client-event.sh" "$temporary/event-dispatch.sh" "$temporary/hooks"
+        ovpn_audit_event_resources "$temporary"
         ovpn_audit_command systemctl daemon-reload
         ovpn_audit_command systemctl enable --now "$OVPN_SERVICE"
         ovpn_audit_file M "$OVPN_SERVER_CONF"
@@ -235,7 +304,6 @@ ovpn_apply() {
         ovpn_audit_file M "$OVPN_RUNTIME_SERVER_KEY"
         ovpn_audit_file M "$OVPN_RUNTIME_CRL"
         ovpn_audit_file M "$OVPN_RUNTIME_TLS_CRYPT_V2"
-        ovpn_audit_file M "$OVPN_AUTH_VERIFY_SCRIPT"
         ovpn_audit_file M "$OVPN_DROPIN"
         rm -rf -- "$temporary"
         ovpn_print_audit "检查成功"
@@ -258,6 +326,30 @@ ovpn_status() {
     if systemctl is-active --quiet "$OVPN_SERVICE" 2>/dev/null; then printf '服务：运行中\n'; else printf '服务：未运行\n'; fi
     printf '服务端模板：%s\n' "$([[ -s "$OVPN_RESOURCE_DIR/config/server/default.conf.tpl" ]] && printf 存在 || printf 缺失)"
     printf '运行配置：%s\n' "$([[ -s "$OVPN_SERVER_CONF" ]] && printf 存在 || printf 缺失)"
+    ovpn_connection_limit_summary "$OVPN_SERVER_CONF"
     ovpn_network_summary
     ovpn_print_audit
+}
+
+ovpn_connection_limit_summary() {
+    local config="$1" max_clients="未配置" duplicate_cn="禁用（同 CN 新连接替换旧连接）" result
+    if [[ -f "$config" && ! -L "$config" ]]; then
+        result="$(awk '
+            /^[[:space:]]*[#;]/ { next }
+            $1 == "max-clients" { count++; value=$2; if (NF != 2) invalid=1 }
+            END {
+                if (count == 0) print "未配置"
+                else if (count == 1 && !invalid && value ~ /^[1-9][0-9]*$/) print value
+                else print "无法判定"
+            }
+        ' "$config")"
+        max_clients="$result"
+        result="$(awk '
+            /^[[:space:]]*[#;]/ { next }
+            $1 == "duplicate-cn" { count++; if (NF != 1) invalid=1 }
+            END { if (count == 0) print "禁用（同 CN 新连接替换旧连接）"; else if (!invalid) print "启用"; else print "无法判定" }
+        ' "$config")"
+        duplicate_cn="$result"
+    fi
+    printf '全局连接上限：%s\n同 CN 并发：%s\n' "$max_clients" "$duplicate_cn"
 }

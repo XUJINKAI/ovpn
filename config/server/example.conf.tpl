@@ -64,6 +64,8 @@ script-security 2
 auth-user-pass-verify {{AUTH_VERIFY_SCRIPT}} via-file
 auth-user-pass-optional
 setenv OVPN_AUTH_DB {{AUTH_DB}}
+client-connect {{CLIENT_EVENT_SCRIPT}} connect
+client-disconnect {{CLIENT_EVENT_SCRIPT}} disconnect
 # auth-gen-token 3600 600
 
 # 链路探测、MTU 和队列。keepalive 10 120 等价于服务端 ping 10 与 ping-restart 120，并推送相应值。
@@ -83,7 +85,7 @@ group nogroup
 # chroot /var/empty
 
 # 并发、连接与闲置限制。
-# max-clients 100
+max-clients {{MAX_CLIENTS}}
 # connect-freq 100 10
 # connect-freq-initial 100 10
 # inactive 3600 1048576
@@ -104,8 +106,7 @@ verb {{SERVER_VERB}}
 # up /etc/openvpn/server/scripts/up.sh
 # down /etc/openvpn/server/scripts/down.sh
 # down-pre
-# client-connect /etc/openvpn/server/scripts/client-connect.sh
-# client-disconnect /etc/openvpn/server/scripts/client-disconnect.sh
+# 默认模板已通过受管 client-event.sh 使用 client-connect 和 client-disconnect；一个实例不能重复指定这些指令。
 # learn-address /etc/openvpn/server/scripts/learn-address.sh
 
 # 管理接口若使用 TCP 且无密码会暴露高权限控制面；优先使用受权限限制的 Unix socket。

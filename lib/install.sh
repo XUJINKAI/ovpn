@@ -2,7 +2,7 @@
 # ovpn 管理器安装与卸载。
 
 ovpn_install() {
-    local mode="" source target relative resource_target resource_dir config_user config_group
+    local mode="" source target relative resource_target resource_dir resource_mode config_user config_group
     while (( $# > 0 )); do
         case "$1" in
             --ln|--copy)
@@ -24,6 +24,18 @@ ovpn_install() {
     ovpn_audit_file A "$OVPN_STATE_DIR/scripts"
     ovpn_audit_file A "$OVPN_STATE_DIR/network"
     ovpn_audit_file A "$OVPN_STATE_DIR/systemd"
+    for resource_dir in scripts network systemd; do
+        while IFS= read -r -d '' source; do
+            [[ -f "$source" && ! -L "$source" ]] || continue
+            relative="${source#"$OVPN_SOURCE_RESOURCE_DIR/$resource_dir/"}"
+            resource_target="$OVPN_STATE_DIR/$resource_dir/$relative"
+            if [[ -e "$resource_target" || -L "$resource_target" ]]; then
+                ovpn_audit_file M "$resource_target"
+            else
+                ovpn_audit_file A "$resource_target"
+            fi
+        done < <(find "$OVPN_SOURCE_RESOURCE_DIR/$resource_dir" -mindepth 1 -type f -print0)
+    done
     [[ "$OVPN_DRY_RUN" != 1 ]] || { ovpn_print_audit "检查成功"; ovpn_dry_run_result; return; }
 
     config_user="$(ovpn_invoking_user)"
@@ -55,28 +67,40 @@ ovpn_install() {
     chown -R -- "$config_user:$config_group" "$OVPN_STATE_DIR/config"
     find "$OVPN_STATE_DIR/config" -type d -exec chmod 0700 -- {} +
     find "$OVPN_STATE_DIR/config" -type f -exec chmod 0600 -- {} +
+    [[ ! -d "$OVPN_STATE_DIR/config/hooks" ]] || find "$OVPN_STATE_DIR/config/hooks" -maxdepth 1 -type f ! -name .gitkeep -exec chmod 0700 -- {} +
     while IFS= read -r -d '' source; do
         relative="${source#"$OVPN_SOURCE_RESOURCE_DIR/config/"}"
         resource_target="$OVPN_STATE_DIR/config/$relative"
-        if [[ -d "$source" ]]; then
-            install -d -o "$config_user" -g "$config_group" -m 0700 -- "$resource_target"
-        elif [[ ! -e "$resource_target" ]]; then
-            install -o "$config_user" -g "$config_group" -m 0600 -- "$source" "$resource_target"
+            if [[ -d "$source" ]]; then
+                install -d -o "$config_user" -g "$config_group" -m 0700 -- "$resource_target"
+            elif [[ ! -e "$resource_target" ]]; then
+                if [[ "$relative" == hooks/* && "$relative" != hooks/.gitkeep ]]; then
+                    install -o "$config_user" -g "$config_group" -m 0700 -- "$source" "$resource_target"
+                else
+                    install -o "$config_user" -g "$config_group" -m 0600 -- "$source" "$resource_target"
+                fi
         fi
     done < <(find "$OVPN_SOURCE_RESOURCE_DIR/config" -mindepth 1 -print0)
+    install -d -o "$config_user" -g "$config_group" -m 0700 -- "$OVPN_STATE_DIR/config/hooks"
     for resource_dir in scripts network systemd; do
         install -d -o root -g root -m 0755 -- "$OVPN_STATE_DIR/$resource_dir"
         while IFS= read -r -d '' source; do
             relative="${source#"$OVPN_SOURCE_RESOURCE_DIR/$resource_dir/"}"
             resource_target="$OVPN_STATE_DIR/$resource_dir/$relative"
             if [[ -d "$source" ]]; then
+                [[ ! -e "$resource_target" && ! -L "$resource_target" ]] ||
+                    [[ -d "$resource_target" && ! -L "$resource_target" ]] ||
+                    ovpn_die "工具静态资源目录不是安全目录：$resource_target"
                 install -d -o root -g root -m 0755 -- "$resource_target"
-            elif [[ ! -e "$resource_target" ]]; then
-                install -o root -g root -m 0644 -- "$source" "$resource_target"
+            else
+                [[ ! -e "$resource_target" && ! -L "$resource_target" ]] ||
+                    [[ -f "$resource_target" && ! -L "$resource_target" ]] ||
+                    ovpn_die "工具静态资源目标不是安全普通文件：$resource_target"
+                if [[ "$resource_dir" == scripts ]]; then resource_mode=0755; else resource_mode=0644; fi
+                ovpn_atomic_install "$source" "$resource_target" "$resource_mode"
             fi
         done < <(find "$OVPN_SOURCE_RESOURCE_DIR/$resource_dir" -mindepth 1 -print0)
     done
-    chmod 0755 -- "$OVPN_STATE_DIR/scripts/auth-verify.sh"
     ovpn_print_audit
     ovpn_result "管理器已安装完成。下一步：sudo ovpn core install"
 }
@@ -104,6 +128,9 @@ ovpn_uninstall() {
     ovpn_audit_file D "$OVPN_RUNTIME_CRL"
     ovpn_audit_file D "$OVPN_RUNTIME_TLS_CRYPT_V2"
     ovpn_audit_file D "$OVPN_AUTH_VERIFY_SCRIPT"
+    ovpn_audit_file D "$OVPN_CLIENT_EVENT_SCRIPT"
+    ovpn_audit_file D "$OVPN_EVENT_DISPATCH_SCRIPT"
+    ovpn_audit_file D "$OVPN_RUNTIME_HOOK_DIR"
     ovpn_audit_file D "$OVPN_DROPIN"
     ovpn_audit_file D "$OVPN_SYSCTL_FILE"
     ovpn_audit_file D "$OVPN_NAT_UNIT"
@@ -129,7 +156,9 @@ ovpn_uninstall() {
     fi
     systemctl disable --now "$OVPN_SERVICE" >/dev/null 2>&1 || true
     systemctl disable --now "$OVPN_NAT_SERVICE" >/dev/null 2>&1 || true
-    rm -f -- "$OVPN_SERVER_CONF" "$OVPN_RUNTIME_CA" "$OVPN_RUNTIME_SERVER_CERT" "$OVPN_RUNTIME_SERVER_KEY" "$OVPN_RUNTIME_CRL" "$OVPN_RUNTIME_TLS_CRYPT_V2" "$OVPN_AUTH_VERIFY_SCRIPT" "$OVPN_NAT_RULES" "$OVPN_DROPIN" "$OVPN_SYSCTL_FILE" "$OVPN_NAT_UNIT"
+    rm -f -- "$OVPN_SERVER_CONF" "$OVPN_RUNTIME_CA" "$OVPN_RUNTIME_SERVER_CERT" "$OVPN_RUNTIME_SERVER_KEY" "$OVPN_RUNTIME_CRL" "$OVPN_RUNTIME_TLS_CRYPT_V2" "$OVPN_AUTH_VERIFY_SCRIPT" "$OVPN_CLIENT_EVENT_SCRIPT" "$OVPN_EVENT_DISPATCH_SCRIPT" "$OVPN_NAT_RULES" "$OVPN_DROPIN" "$OVPN_SYSCTL_FILE" "$OVPN_NAT_UNIT"
+    rm -f -- "$OVPN_RUNTIME_HOOK_DIR/authentication-failed" "$OVPN_RUNTIME_HOOK_DIR/client-connected" "$OVPN_RUNTIME_HOOK_DIR/client-disconnected"
+    rmdir --ignore-fail-on-non-empty -- "$OVPN_RUNTIME_HOOK_DIR" 2>/dev/null || true
     rmdir --ignore-fail-on-non-empty -- "$(dirname -- "$OVPN_AUTH_VERIFY_SCRIPT")" "$(dirname -- "$OVPN_DROPIN")" "$OVPN_SERVER_DIR" 2>/dev/null || true
     systemctl daemon-reload
     (( purge == 0 )) || rm -rf -- "$OVPN_STATE_DIR"

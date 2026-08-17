@@ -76,7 +76,8 @@ ovpn_core() {
 }
 
 ovpn_core_test_file() {
-    local config="$1" hook_candidate="${2:-}"
+    local config="$1" auth_candidate="${2:-}" client_candidate="${3:-}" dispatcher_candidate="${4:-}" hooks_candidate="${5:-}"
+    local name hook needs_dispatcher=0
     ovpn_require_command openvpn
     ovpn_safe_regular_file "$config"
     ovpn_audit_command test -s "$config"
@@ -86,14 +87,52 @@ ovpn_core_test_file() {
         ovpn_die "OpenVPN 配置仍包含未替换占位符：$config"
     fi
     if grep -Fq "auth-user-pass-verify $OVPN_AUTH_VERIFY_SCRIPT " "$config"; then
+        needs_dispatcher=1
         ovpn_audit_command test -x "$OVPN_AUTH_VERIFY_SCRIPT"
-        if [[ -n "$hook_candidate" ]]; then
-            [[ -x "$hook_candidate" && ! -L "$hook_candidate" ]] ||
-                ovpn_die "OpenVPN 认证脚本候选文件缺失、不可执行或是符号链接：$hook_candidate"
+        if [[ -n "$auth_candidate" ]]; then
+            [[ -x "$auth_candidate" && ! -L "$auth_candidate" ]] ||
+                ovpn_die "OpenVPN 认证脚本候选文件缺失、不可执行或是符号链接：$auth_candidate"
         elif [[ ! -x "$OVPN_AUTH_VERIFY_SCRIPT" || -L "$OVPN_AUTH_VERIFY_SCRIPT" ]]; then
             ovpn_die "OpenVPN 认证脚本缺失、不可执行或错误地安装为符号链接；请重新运行 ovpn apply"
+        elif [[ "$(stat -c '%U:%G:%a' "$OVPN_AUTH_VERIFY_SCRIPT")" != root:root:755 ]]; then
+            ovpn_die "OpenVPN 认证脚本权限错误；请重新运行 ovpn apply"
         fi
     fi
+    if grep -Fq "client-connect $OVPN_CLIENT_EVENT_SCRIPT connect" "$config" ||
+        grep -Fq "client-disconnect $OVPN_CLIENT_EVENT_SCRIPT disconnect" "$config"; then
+        needs_dispatcher=1
+        ovpn_audit_command test -x "$OVPN_CLIENT_EVENT_SCRIPT"
+        hook="${client_candidate:-$OVPN_CLIENT_EVENT_SCRIPT}"
+        [[ -x "$hook" && ! -L "$hook" ]] ||
+            ovpn_die "OpenVPN 连接事件脚本缺失、不可执行或是符号链接：$hook"
+        if [[ -z "$client_candidate" && "$(stat -c '%U:%G:%a' "$hook")" != root:root:755 ]]; then
+            ovpn_die "OpenVPN 连接事件脚本权限错误；请重新运行 ovpn apply"
+        fi
+    fi
+    if (( needs_dispatcher == 1 )); then
+        hook="${dispatcher_candidate:-$OVPN_EVENT_DISPATCH_SCRIPT}"
+        ovpn_audit_command test -x "$OVPN_EVENT_DISPATCH_SCRIPT"
+        [[ -x "$hook" && ! -L "$hook" ]] || ovpn_die "OpenVPN 事件分发脚本缺失、不可执行或是符号链接：$hook"
+        if [[ -z "$dispatcher_candidate" && "$(stat -c '%U:%G:%a' "$hook")" != root:root:755 ]]; then
+            ovpn_die "OpenVPN 事件分发脚本权限错误；请重新运行 ovpn apply"
+        fi
+    fi
+    hooks_candidate="${hooks_candidate:-$OVPN_RUNTIME_HOOK_DIR}"
+    if (( needs_dispatcher == 1 )) && [[ "$hooks_candidate" == "$OVPN_RUNTIME_HOOK_DIR" ]]; then
+        [[ -d "$hooks_candidate" && ! -L "$hooks_candidate" &&
+            "$(stat -c '%U:%G:%a' "$hooks_candidate")" == root:nogroup:750 ]] ||
+            ovpn_die "OpenVPN 运行回调目录缺失或权限错误；请重新运行 ovpn apply"
+    fi
+    for name in authentication-failed client-connected client-disconnected; do
+        hook="$hooks_candidate/$name"
+        [[ ! -e "$hook" && ! -L "$hook" ]] ||
+            [[ -f "$hook" && ! -L "$hook" && -x "$hook" ]] ||
+            ovpn_die "OpenVPN 运行回调不是安全的普通可执行文件：$hook"
+        if [[ "$hooks_candidate" == "$OVPN_RUNTIME_HOOK_DIR" && -e "$hook" &&
+            "$(stat -c '%U:%G:%a' "$hook")" != root:nogroup:750 ]]; then
+            ovpn_die "OpenVPN 运行回调权限错误；请重新运行 ovpn apply：$hook"
+        fi
+    done
 }
 
 ovpn_core_test() {

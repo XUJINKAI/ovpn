@@ -14,6 +14,9 @@ readonly OVPN_RUNTIME_SERVER_KEY="$OVPN_SERVER_DIR/server.key"
 readonly OVPN_RUNTIME_CRL="$OVPN_SERVER_DIR/crl.pem"
 readonly OVPN_RUNTIME_TLS_CRYPT_V2="$OVPN_SERVER_DIR/tls-crypt-v2.key"
 readonly OVPN_AUTH_VERIFY_SCRIPT="$OVPN_SERVER_DIR/auth-verify.sh"
+readonly OVPN_CLIENT_EVENT_SCRIPT="$OVPN_SERVER_DIR/client-event.sh"
+readonly OVPN_EVENT_DISPATCH_SCRIPT="$OVPN_SERVER_DIR/event-dispatch.sh"
+readonly OVPN_RUNTIME_HOOK_DIR="$OVPN_SERVER_DIR/hooks"
 readonly OVPN_DROPIN="/etc/systemd/system/$OVPN_SERVICE.d/ovpn.conf"
 readonly OVPN_SYSCTL_FILE="/etc/sysctl.d/99-ovpn.conf"
 readonly OVPN_NAT_SERVICE="ovpn-nat.service"
@@ -218,7 +221,7 @@ ovpn_validate_env_assignment() {
     value="${assignment#*=}"
     [[ "$key" =~ ^[A-Z][A-Z0-9_]*$ ]] || ovpn_die "环境变量名格式无效：$key"
     case "$key" in
-        CA_CERT|SERVER_CERT|SERVER_KEY|CRL_FILE|TLS_CRYPT_V2_SERVER_KEY|AUTH_VERIFY_SCRIPT|AUTH_DB|CA_INLINE|CLIENT_CERT_INLINE|CLIENT_KEY_INLINE|TLS_CRYPT_V2_CLIENT_INLINE|AUTH_USER_PASS|APPEND_CONFIG)
+        CA_CERT|SERVER_CERT|SERVER_KEY|CRL_FILE|TLS_CRYPT_V2_SERVER_KEY|AUTH_VERIFY_SCRIPT|CLIENT_EVENT_SCRIPT|AUTH_DB|CA_INLINE|CLIENT_CERT_INLINE|CLIENT_KEY_INLINE|TLS_CRYPT_V2_CLIENT_INLINE|AUTH_USER_PASS|APPEND_CONFIG)
             ovpn_die "环境变量名由 ovpn 保留：$key"
             ;;
     esac

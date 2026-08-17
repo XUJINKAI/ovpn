@@ -82,6 +82,10 @@ ovpn [--dir DIR] [--dry-run] [--no-audit] COMMAND ...
     ovpn/
         config/
             ovpn.env
+            hooks/
+                client-connected
+                client-disconnected
+                authentication-failed
             server/default.conf.tpl
             server/example.conf.tpl
             client/default.conf.tpl
@@ -89,6 +93,8 @@ ovpn [--dir DIR] [--dry-run] [--no-audit] COMMAND ...
             client/<name>.conf.tpl
         scripts/
             auth-verify.sh
+            client-event.sh
+            event-dispatch.sh
         network/
             sysctl.conf
             nat-client.nft.tpl
@@ -111,6 +117,12 @@ ovpn [--dir DIR] [--dry-run] [--no-audit] COMMAND ...
         crl.pem
         tls-crypt-v2.key
         auth-verify.sh
+        client-event.sh
+        event-dispatch.sh
+        hooks/
+            client-connected
+            client-disconnected
+            authentication-failed
         ovpn-nat.nft
 /etc/systemd/system/openvpn-server@server.service.d/ovpn.conf
 /etc/sysctl.d/99-ovpn.conf
@@ -125,9 +137,12 @@ ovpn [--dir DIR] [--dry-run] [--no-audit] COMMAND ...
 `ovpn`只能删除自己明确拥有的`ovpn/`子目录和生成文件，不得递归删除`/etc/openvpn`，也不得修改未知的服务端或客户端实例。
 默认目录之外的管理目录由`--dir`显式指定，目录内部结构保持不变。
 
-`/etc/openvpn/server/server.conf`、CA与服务端凭据副本、CRL副本、认证脚本、NAT规则、systemd unit、OpenVPN drop-in和sysctl文件是运行时生成物，不是用户配置入口。
+`/etc/openvpn/server/server.conf`、CA与服务端凭据副本、CRL副本、认证和连接事件脚本、NAT规则、systemd unit、OpenVPN drop-in和sysctl文件是运行时生成物，不是用户配置入口。
 用户修改`config/server/default.conf.tpl`后运行`ovpn apply`使其生效；不得直接依赖对生成文件的手工修改，下一次 apply 会覆盖这些修改。
 
+`config/hooks/`是用户维护的通知入口，目录归配置维护用户、mode 为`0700`，三个固定事件文件存在时归配置维护用户、mode 为`0700`。
+固定事件文件不存在时忽略，存在时必须是非符号链接普通文件且可执行；apply 把通过检查的文件复制到`/etc/openvpn/server/hooks/`，运行目录为`root:nogroup`、mode `0750`，运行回调为`root:nogroup`、mode `0750`，OpenVPN 不直接执行用户可写的配置副本。
+用户删除配置回调后再次 apply 必须删除对应运行副本，并把删除纳入候选比较、事务回滚和 A/M/D 审计。
 `config/server/`和`config/client/`允许用户直接新增、修改和删除普通模板文件。
 模板名由文件名`<name>.conf.tpl`确定，`default.conf.tpl`是省略`--template`时使用的默认模板。
 源码提供的`example.conf.tpl`是带详细注释的参数参考，不会被隐式选用；`default.conf.tpl`只保留简单有效的默认配置。
@@ -140,9 +155,12 @@ PKI、客户端私钥、tls-crypt-v2 密钥、密码摘要和导出的完整客�
 `pki/`保持 Easy-RSA 原生签发数据库和文件布局；`ca-chain.crt`是 OpenVPN 客户端信任入口，默认与自签`ca.crt`相同，手工改用外部签发中间 CA 时包含中间 CA 及上级链。
 `upstream-chain.crt`仅在手工使用外部签发中间 CA 时存在，用于生成服务端发送链；公开 CLI 不导入或转换外部 CA。
 
-项目提供的模板保存在源码`config/`中，OpenVPN认证脚本、网络资源和systemd资源分别保存在源码`scripts/`、`network/`和`systemd/`中，不把文件正文嵌入Shell脚本。
-无论`install`使用`--ln`还是`--copy`，静态资源都按源码布局复制到`<dir>/`，不安装到`/usr/local/lib/ovpn`；已有文件不覆盖，确保用户修改得到保留。
-`--ln`和`--copy`只影响入口与代码模块的安装方式。
+项目提供的模板和默认无副作用的事件回调示例保存在源码`config/`中，OpenVPN认证与事件分发脚本、网络资源和systemd资源分别保存在源码`scripts/`、`network/`和`systemd/`中，不把文件正文嵌入Shell脚本。
+三个回调示例逐项说明可用的白名单变量并直接成功退出，用户可以在对应事件文件中继续编写通知逻辑；install 只在目标缺失时复制示例，不覆盖已有用户 hook。
+无论`install`使用`--ln`还是`--copy`，资源都按源码布局安装到`<dir>/`，不安装到`/usr/local/lib/ovpn`。
+`config/`是用户配置，install 只复制缺失目录和文件，不覆盖已有环境文件、模板或用户 hook，也不检测或提醒旧配置内容。
+`scripts/`、`network/`和`systemd/`是工具拥有的静态资源，每次 install 都从当前源码覆盖更新；写入前必须拒绝符号链接、非普通目标和目录类型冲突，避免跟随未知路径。
+因此重新执行任一安装模式都会更新入口、代码模块和工具静态资源，但不会修改用户配置；`--ln`和`--copy`的差异仍只影响入口与代码模块的安装方式。
 
 ## 模板模型
 
@@ -161,11 +179,15 @@ PKI、客户端私钥、tls-crypt-v2 密钥、密码摘要和导出的完整客�
 {{CRL_FILE}}
 {{TLS_CRYPT_V2_SERVER_KEY}}
 {{AUTH_VERIFY_SCRIPT}}
+{{CLIENT_EVENT_SCRIPT}}
 {{AUTH_DB}}
 {{APPEND_CONFIG}}
 ```
 
 服务端模板还从`config/ovpn.env`读取`{{SERVER_PORT}}`和`{{SERVER}}`等公共环境变量；默认模板分别用它们生成`port`与`server`指令。
+默认环境文件提供`MAX_CLIENTS`，默认服务端模板用它生成 OpenVPN 原生`max-clients`指令；该值只接受大于零的十进制整数，限制整个服务实例同时保持的客户端连接总数。
+ovpn 不实现或维护每个客户端身份的连接计数，也不提供对应环境变量、状态目录或拒绝逻辑。
+同一证书 CN 是否允许并发完全由服务端模板中的 OpenVPN 原生`duplicate-cn`指令决定；未启用时新连接会断开该 CN 的旧连接，启用时同 CN 连接只受全局`max-clients`等 OpenVPN 原生限制。
 重复的`apply --env KEY=VALUE`按出现顺序覆盖公共环境变量，重复的`apply --add-config LINE`按顺序在模板第一个独占整行的`{{APPEND_CONFIG}}`位置展开；这些覆盖只影响本次运行配置，不修改模板或环境文件。
 
 占位符替换值全部由工具根据当前`--dir`和固定运行布局计算，用户不能通过命令行覆盖。
@@ -220,7 +242,7 @@ PKI、客户端私钥、tls-crypt-v2 密钥、密码摘要和导出的完整客�
 它不创建 PKI、不覆盖已有用户配置、不生成运行配置，也不启动服务。
 
 `--ln`把入口和内部模块安装为指向当前源码的符号链接，适合随仓库更新。
-OpenVPN直接执行的`scripts/auth-verify.sh`不属于管理器内部模块；`apply`把它部署为root-owned的`/etc/openvpn/server/auth-verify.sh`真实文件，避免systemd的`ProtectHome=true`阻止服务访问位于用户home下的源码链接。
+OpenVPN直接执行的`scripts/auth-verify.sh`、`scripts/client-event.sh`和`scripts/event-dispatch.sh`不属于管理器内部模块；每次 install 都更新其管理目录副本，apply 再把它们部署为 root-owned 的`/etc/openvpn/server/`真实文件，并把用户回调部署到 root-owned 的`/etc/openvpn/server/hooks/`，避免 systemd 的`ProtectHome=true`阻止服务访问位于用户 home 下的源码或配置副本。
 `--copy`复制入口和内部模块，复制后不依赖源码目录。
 两个参数必须且只能指定一个。
 
@@ -257,9 +279,10 @@ CA 和服务端证书使用相同有效期，默认 3650 天；`--days DAYS`同�
 - 获取`ovpn.lock`并检查 PKI、模板和依赖。
 - 默认选择`config/server/default.conf.tpl`，或按`--template`选择命名模板，并把本次环境覆盖和追加配置渲染到临时目录，不修改模板或环境文件。
 - 从管理 PKI 复制 CA 链、服务端证书链、服务端私钥、CRL 和 tls-crypt-v2 服务端密钥到候选目录，使服务配置只引用`/etc/openvpn/server`中的最小运行副本，不直接访问`ovpn/pki`。
+- 检查用户事件回调并把受管认证脚本、连接事件脚本、事件分发脚本和存在的用户回调复制到候选运行目录；候选服务配置只引用 root-owned 的运行副本。
 - 根据固定运行布局生成必要的 systemd drop-in。
 - 检查候选配置非空且不存在未替换占位符；OpenVPN 2.6 不提供 TLS 配置的无副作用完整校验模式。
-- 比较候选配置、运行凭据、认证脚本和systemd drop-in与当前运行文件；完全相同时不写文件或 daemon-reload，但仍确保服务已经启用并启动。
+- 比较候选配置、运行凭据、认证与事件脚本、用户回调和systemd drop-in与当前运行文件；完全相同时不写文件或 daemon-reload，但仍确保服务已经启用并启动。
 - 为本次事务保存当前运行文件和服务状态，原子安装发生变化的文件。
 - 执行 daemon-reload；服务原本运行时 restart，原本停止时 enable 并启动。
 - restart 或后续验证失败时恢复本次事务前的文件，并尝试恢复原服务状态。
@@ -268,6 +291,79 @@ CA 和服务端证书使用相同有效期，默认 3650 天；`--days DAYS`同�
 模板由用户维护且始终保留，所以普通 apply 不创建长期备份。
 
 `apply`不读取配置以生成防火墙规则，也不修改已经启用的 NAT；服务端网段变化后由`status`报告已安装 NAT 与当前配置的漂移。
+
+## 连接限制与事件回调
+
+全局连接上限由服务端模板中的 OpenVPN 原生`max-clients`实现。
+ovpn 不提供每身份连接上限；模板未启用`duplicate-cn`时使用 OpenVPN 默认的同 CN 新连接替换旧连接行为，启用时允许同 CN 并发。
+模板是用户配置，用户删除`max-clients`、改变`duplicate-cn`或删除受管 hook 指令即明确改变对应策略；apply 只按模板渲染和校验，不在模板之外静默注入限制。
+`status`只报告当前运行配置是否包含可识别的`max-clients`和`duplicate-cn`指令，不把静态配置报告成实际并发连接数。
+
+默认服务端模板使用以下 OpenVPN 原生脚本参数连接受管脚本，具体固定路径通过模板占位符渲染：
+
+```conf
+script-security 2
+auth-user-pass-verify {{AUTH_VERIFY_SCRIPT}} via-file
+client-connect {{CLIENT_EVENT_SCRIPT}} connect
+client-disconnect {{CLIENT_EVENT_SCRIPT}} disconnect
+```
+
+`script-security 2`允许 OpenVPN 执行外部脚本。
+`auth-user-pass-verify`继续使用现有`auth-verify.sh`完成可选密码认证；OpenVPN 把只存活于认证过程的临时凭据文件路径作为最后一个参数传入，脚本验证`auth-db`后返回成功或失败。
+认证失败时`auth-verify.sh`先保留原认证失败结果，再以固定事件名`authentication-failed`调用`event-dispatch.sh`；分发器或用户通知失败不得把认证结果改成成功，也不得改变原始拒绝原因。
+该事件只覆盖受管`auth-user-pass-verify`拒绝，不覆盖证书无效或吊销、TLS 握手失败、tls-crypt-v2 拒绝以及`max-clients`拒绝；这些早期失败没有统一稳定的 OpenVPN 脚本回调，ovpn 不解析面向人的 journal 文本来伪造结构化事件。
+认证尚未成功时使用 OpenVPN 提供的`untrusted_ip`或`untrusted_ip6`及`untrusted_port`作为来源字段；这里的 untrusted 表示身份尚未完成认证，字段只用于通知，不作为授权依据。
+
+`client-connect`在客户端通过证书和可选密码认证、连接即将建立时执行`client-event.sh connect`。
+OpenVPN 通过环境变量提供 CN、可信来源地址和端口、分配的虚拟地址等连接字段，并把用于返回动态客户端配置的临时文件路径作为最后一个参数传入；`client-event.sh`不向该文件写配置，只筛选事件字段并调用`event-dispatch.sh client-connected`，随后返回成功。
+`client-disconnect`在已经建立的客户端实例结束时执行`client-event.sh disconnect`。
+OpenVPN 通过环境变量提供 CN、可信来源、虚拟地址、连接时长和收发字节等可用字段，并在命令末尾追加对端地址和端口；`client-event.sh`只筛选字段并调用`event-dispatch.sh client-disconnected`，不维护持久或易失会话状态。
+
+完整调用关系如下：
+
+```text
+认证：
+OpenVPN
+    -> auth-verify.sh
+        -> 验证 auth-db
+        -> 失败时 event-dispatch.sh authentication-failed
+            -> hooks/authentication-failed
+
+连接：
+OpenVPN
+    -> client-event.sh connect
+        -> event-dispatch.sh client-connected
+            -> hooks/client-connected
+
+断开：
+OpenVPN
+    -> client-event.sh disconnect
+        -> event-dispatch.sh client-disconnected
+            -> hooks/client-disconnected
+```
+
+`client-event.sh`只适配 OpenVPN 的`client-connect`和`client-disconnect`两种调用约定，把原始参数和环境转换为统一的非敏感事件字段。
+`event-dispatch.sh`是认证与连接脚本共用的内部执行层，不直接写入 OpenVPN 配置；它根据固定事件名查找并调用用户 hook，统一执行字段白名单、超时、日志和失败隔离。
+
+支持以下固定事件：
+
+- `client-connected`：客户端已经通过证书和可选密码认证，`client-connect`即将成功返回。
+- `client-disconnected`：已建立的客户端实例断开；可用时包含连接时长和收发字节数，OpenVPN 进程被强制终止、主机掉电或崩溃时不保证执行。
+- `authentication-failed`：受管密码认证拒绝连接，包括认证记录缺失或异常、用户名与证书 CN 不一致、缺少凭据或密码错误；事件不得暴露具体密码、摘要或可用于枚举账户的细分拒绝原因。
+
+OpenVPN 2.6 没有向`client-disconnect`脚本提供稳定的“被同 CN 新连接顶替”原因。
+ovpn 不维护会话状态、不解析日志，也不推断单次断开的具体原因；同 CN 顶替导致的断开只产生普通`client-disconnected`事件，文档、日志和帮助不得把它描述为可可靠区分的顶替事件。
+全局`max-clients`可能在`client-connect`执行前拒绝连接，OpenVPN 没有为该拒绝提供独立脚本 hook，因此本阶段不承诺全局上限拒绝回调。
+
+事件分发器只查找固定运行目录中与事件同名的回调文件，不扫描子目录、不接受来自 OpenVPN 环境的路径，也不通过 shell 解释回调命令。
+回调以事件名作为第一个参数，并从空环境构造显式白名单环境变量：`PATH`、`OVPN_EVENT`、`OVPN_COMMON_NAME`、`OVPN_REMOTE_IP`、`OVPN_REMOTE_PORT`、`OVPN_IFCONFIG_POOL_REMOTE_IP`、`OVPN_CONNECTED_AT`、`OVPN_DURATION_SECONDS`、`OVPN_BYTES_RECEIVED`和`OVPN_BYTES_SENT`。
+认证失败把`untrusted_ip`或`untrusted_ip6`映射为统一的`OVPN_REMOTE_IP`，连接和断开把`trusted_ip`或`trusted_ip6`映射到同一字段；原始 OpenVPN 环境和认证临时文件路径不得被用户回调继承。
+缺失值使用空字符串；所有值在进入回调环境前检查为单行文本并限制长度，客户端名继续使用项目既有安全名称规则。
+
+通知回调不是认证或连接策略的一部分。
+分发器使用固定十秒执行上限同步调用回调，超时后先终止并在两秒后强制结束，把 stdout 和 stderr 送入该 OpenVPN unit 的 journal；回调退出非零、超时或不存在都不得改变认证、连接或断开结果，受管 hook 自身的事件字段校验失败同样采取连接优先，只记录错误并继续 OpenVPN 原生流程。
+回调以 OpenVPN 降权后的服务身份运行，不获得 root 权限；systemd drop-in不为回调增加文件写权限，不放宽管理 PKI、`auth-db`、服务端私钥或用户配置目录。
+回调若自行访问网络、保存日志或调用外部通知服务，其依赖、秘密、输出内容、重试、去重和副作用由用户负责，ovpn 不读取或审计回调内部行为；ovpn 保证不向回调传递受管秘密，但无法阻止用户回调自行读取可访问数据或把秘密写入 journal。
 
 ## 网络能力
 
@@ -283,7 +379,7 @@ IPv4 转发与客户端 NAT 彼此独立，启用其中一个不会隐式启用�
 ### `ovpn core start|stop|restart|test|logs`
 
 `core start`、`core stop`和`core restart`操作`openvpn-server@server.service`。
-`core test`静态检查当前`/etc/openvpn/server/server.conf`非空、不存在未替换占位符，并确认配置引用的受管认证脚本是可执行的真实文件，不渲染模板、不写文件，也不改变服务状态。
+`core test`静态检查当前`/etc/openvpn/server/server.conf`非空、不存在未替换占位符，并确认配置引用的受管认证与连接事件脚本是可执行的真实文件；运行回调存在时还要确认它是固定 hook 目录中的非符号链接普通可执行文件，但不实际调用回调，不渲染模板、不写文件，也不改变服务状态。
 `core start`和`core restart`前复用`core test`；OpenVPN 对指令、证书和运行环境的完整验证只能在实际启动或重启时完成。
 `core start`或`core restart`失败时显示该实例最近 100 行 journal，并停止 systemd 的自动重试循环，避免无效配置持续重启。
 `core logs`以入口已经取得的 root 权限显示同一组最近日志，`-f`在最近 100 行之后持续显示新日志，用户不需要单独调用`sudo journalctl`。
@@ -370,7 +466,7 @@ Easy-RSA 的原生已签证书保持不变；导出时使用 OpenSSL 在临时�
 
 ## 卸载与恢复
 
-`ovpn uninstall`停止并 disable OpenVPN 与客户端 NAT 服务，删除安装入口、内部模块和工具生成的 OpenVPN、systemd、sysctl 与 nftables 集成文件，执行 daemon-reload，但保留`<dir>`中的模板、PKI、客户端和备份。
+`ovpn uninstall`停止并 disable OpenVPN 与客户端 NAT 服务，删除安装入口、内部模块和工具生成的 OpenVPN、认证与事件脚本、运行回调、systemd、sysctl 与 nftables 集成文件，执行 daemon-reload，但保留`<dir>`中的模板、用户回调、PKI、客户端和备份。
 它不卸载可能被其他程序使用的系统软件包，也不删除用户自行维护的外部文件或防火墙规则。
 
 `ovpn uninstall --purge`删除管理目录中的模板、CA、私钥、客户端、密码和普通状态，必须在终端输入`PURGE`。
@@ -390,7 +486,7 @@ Easy-RSA 的原生已签证书保持不变；导出时使用 OpenSSL 在临时�
 /usr/local/lib/ovpn/                                 # 已删除
 /etc/openvpn/
     ovpn/                                            # 保留，内部结构不变
-        config/                                      # 用户模板与公共环境文件
+        config/                                      # 用户模板、公共环境文件与事件回调
         scripts/ network/ systemd/                   # 静态资源
         pki/ auth-db clients/ backup/ lock/          # 证书、密码、客户端状态与备份
     server/                                          # 运行文件已删除；目录清空后一并移除，管理员自行放入的文件会使目录保留
@@ -416,7 +512,7 @@ Easy-RSA 的原生已签证书保持不变；导出时使用 OpenSSL 在临时�
 
 ## dry-run、审计和安全
 
-`--dry-run`完成参数、模板、占位符、路径、依赖、PKI 和候选配置检查，按真实顺序显示计划命令和 A/M/D 文件事件，但不安装、签发、吊销、写文件、启动编辑器、修改防火墙或启停服务。
+`--dry-run`完成参数、模板、占位符、路径、依赖、PKI、事件回调和候选配置检查，按真实顺序显示计划命令和 A/M/D 文件事件，但不安装、签发、吊销、写文件、调用事件回调、启动编辑器、修改防火墙或启停服务。
 需要正式生成随机密钥才能完成的验证在 dry-run 中标记为未执行，不伪造成功结论。
 原本没有明确成功输出的修改命令在最后输出一条独立结果，说明已完成的状态和关键恢复位置；`status`、`ls`、`core test`、`core logs`和`edit`等已有内容或交互反馈的命令不追加冗余的完成句。dry-run 统一明确未执行系统变更。
 结果输出与审计独立，`--no-audit`不隐藏结果；stdout 连接支持颜色的终端时使用绿色，非终端、`TERM=dumb`或设置`NO_COLOR`时输出无 ANSI 颜色的纯文本。
@@ -431,7 +527,7 @@ Easy-RSA 的原生已签证书保持不变；导出时使用 OpenSSL 在临时�
 
 ## 验证范围
 
-最低自动验证包括所有修改 Shell 脚本的`bash -n`、存在时运行 ShellCheck、各级 help、install、core install 与 apply 的 dry-run、core test、模板占位符和渲染测试、客户端模板选择测试、事务回滚测试、MANUAL 命令与实现路径检查以及`git diff --check`。
+最低自动验证包括所有修改 Shell 脚本的`bash -n`、存在时运行 ShellCheck、各级 help、install、core install 与 apply 的 dry-run、core test、模板占位符和渲染测试、全局连接上限渲染测试、认证与连接脚本调用参数测试、回调事件字段白名单与超时隔离测试、客户端模板选择测试、事务回滚测试、MANUAL 命令与实现路径检查以及`git diff --check`。
 
-真实 systemd、OpenVPN 握手、OpenSSL 签发、nftables 数据面、IPv4 转发、公网端口、上游 NAT、DNS 和 gateway 行为必须在 Debian 13 主机验证。
+真实 systemd、OpenVPN 握手、全局连接上限、同 CN 新连接顶替旧连接、连接与断开 hook 的实际顺序和字段、回调的服务降权和网络访问、OpenSSL 签发、nftables 数据面、IPv4 转发、公网端口、上游 NAT、DNS 和 gateway 行为必须在 Debian 13 主机验证。
 客户端模板可以通过语法校验，但不同平台是否接受 DNS 和路由指令仍需在对应客户端实测。

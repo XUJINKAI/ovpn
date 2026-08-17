@@ -79,21 +79,78 @@ sudo tee /etc/openvpn/server/auth-verify.sh >/dev/null <<'EOF'
 set -Eeuo pipefail
 credentials=${1:-}
 database=${OVPN_AUTH_DB:-/etc/openvpn/manual/auth-db}
-[[ -f "$database" && ! -L "$database" ]] || exit 1
+dispatcher=/etc/openvpn/server/event-dispatch.sh
+reject() {
+    if ! OVPN_COMMON_NAME="${common_name:-}" OVPN_REMOTE_IP="${untrusted_ip:-${untrusted_ip6:-}}" OVPN_REMOTE_PORT="${untrusted_port:-}" "$dispatcher" authentication-failed; then printf 'OpenVPN 认证失败通知分发异常\n' >&2; fi
+    exit 1
+}
+[[ -f "$database" && ! -L "$database" ]] || reject
 name=${common_name:-}
-[[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || exit 1
-stored=$(awk -F: -v name="$name" '$1 == name { count++; if (NF != 2) invalid=1; value=$2 } END { if (count != 1 || invalid) exit 1; print value }' "$database") || exit 1
+[[ "$name" =~ ^[A-Za-z0-9][A-Za-z0-9_.-]{0,63}$ ]] || reject
+stored=$(awk -F: -v name="$name" '$1 == name { count++; if (NF != 2) invalid=1; value=$2 } END { if (count != 1 || invalid) exit 1; print value }' "$database") || reject
 [[ "$stored" == '!' ]] && exit 0
-[[ "$stored" == '$6$'* && -f "$credentials" && ! -L "$credentials" ]] || exit 1
-IFS= read -r username <"$credentials" || exit 1
-IFS= read -r password < <(sed -n '2p' "$credentials") || exit 1
-[[ "$username" == "$name" ]] || exit 1
+[[ "$stored" == '$6$'* && -f "$credentials" && ! -L "$credentials" ]] || reject
+IFS= read -r username <"$credentials" || reject
+IFS= read -r password < <(sed -n '2p' "$credentials") || reject
+[[ "$username" == "$name" ]] || reject
 salt=$(awk -F'$' '{ print $3 }' <<<"$stored")
 calculated=$(printf '%s\n' "$password" | openssl passwd -6 -salt "$salt" -stdin)
-[[ "$calculated" == "$stored" ]]
+[[ "$calculated" == "$stored" ]] || reject
 EOF
 sudo chmod 0755 /etc/openvpn/server/auth-verify.sh
 ```
+
+## 创建连接事件和通知回调
+
+以下分发器只允许三个固定事件，把字段限制为单行并从空环境调用用户回调。
+回调最多运行十秒，失败或超时不改变 OpenVPN 的认证和连接结果。
+
+```bash
+sudo install -d -o root -g nogroup -m 0750 /etc/openvpn/server/hooks
+sudo tee /etc/openvpn/server/event-dispatch.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+event=${1:-}
+case "$event" in authentication-failed|client-connected|client-disconnected) ;; *) exit 0 ;; esac
+hook="/etc/openvpn/server/hooks/$event"
+[[ -f "$hook" && ! -L "$hook" && -x "$hook" ]] || exit 0
+sanitize() { local value=${1:-}; value=${value//$'\n'/}; value=${value//$'\r'/}; printf '%s' "${value:0:512}"; }
+if ! timeout --signal=TERM --kill-after=2s 10s env -i \
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
+    OVPN_EVENT="$event" \
+    OVPN_COMMON_NAME="$(sanitize "${OVPN_COMMON_NAME:-}")" \
+    OVPN_REMOTE_IP="$(sanitize "${OVPN_REMOTE_IP:-}")" \
+    OVPN_REMOTE_PORT="$(sanitize "${OVPN_REMOTE_PORT:-}")" \
+    OVPN_IFCONFIG_POOL_REMOTE_IP="$(sanitize "${OVPN_IFCONFIG_POOL_REMOTE_IP:-}")" \
+    OVPN_CONNECTED_AT="$(sanitize "${OVPN_CONNECTED_AT:-}")" \
+    OVPN_DURATION_SECONDS="$(sanitize "${OVPN_DURATION_SECONDS:-}")" \
+    OVPN_BYTES_RECEIVED="$(sanitize "${OVPN_BYTES_RECEIVED:-}")" \
+    OVPN_BYTES_SENT="$(sanitize "${OVPN_BYTES_SENT:-}")" \
+    "$hook" "$event"; then exit 0; fi
+EOF
+sudo chmod 0755 /etc/openvpn/server/event-dispatch.sh
+
+sudo tee /etc/openvpn/server/client-event.sh >/dev/null <<'EOF'
+#!/usr/bin/env bash
+set -Eeuo pipefail
+case "${1:-}" in connect) event=client-connected ;; disconnect) event=client-disconnected ;; *) exit 0 ;; esac
+export OVPN_COMMON_NAME="${common_name:-}"
+export OVPN_REMOTE_IP="${trusted_ip:-${trusted_ip6:-}}"
+export OVPN_REMOTE_PORT="${trusted_port:-}"
+export OVPN_IFCONFIG_POOL_REMOTE_IP="${ifconfig_pool_remote_ip:-}"
+export OVPN_CONNECTED_AT="${time_ascii:-}"
+export OVPN_DURATION_SECONDS="${time_duration:-}"
+export OVPN_BYTES_RECEIVED="${bytes_received:-}"
+export OVPN_BYTES_SENT="${bytes_sent:-}"
+if ! /etc/openvpn/server/event-dispatch.sh "$event"; then printf 'OpenVPN 连接事件通知分发异常：%s\n' "$event" >&2; fi
+exit 0
+EOF
+sudo chmod 0755 /etc/openvpn/server/client-event.sh
+```
+
+按需创建以下任意回调，文件必须为`root:nogroup`、mode `0750`：`authentication-failed`、`client-connected`和`client-disconnected`。
+事件名同时作为第一个参数和`OVPN_EVENT`环境变量传入；脚本可以读取来源地址、CN、虚拟地址和断开流量等白名单字段，但不得输出通知 Token 或其他秘密。
+口令认证失败使用尚未完成身份认证的`untrusted_ip`来源字段；证书无效或吊销、TLS 和 tls-crypt-v2 失败以及达到`max-clients`不会触发这些回调，只能通过 OpenVPN 日志观察。
 
 ## 部署服务端配置
 
@@ -129,6 +186,9 @@ script-security 2
 auth-user-pass-verify /etc/openvpn/server/auth-verify.sh via-file
 auth-user-pass-optional
 setenv OVPN_AUTH_DB /etc/openvpn/manual/auth-db
+client-connect /etc/openvpn/server/client-event.sh connect
+client-disconnect /etc/openvpn/server/client-event.sh disconnect
+max-clients 100
 keepalive 10 120
 persist-key
 persist-tun
@@ -301,7 +361,8 @@ sudo cp -a "$state/pki" "$state/clients" "$state/auth-db" "$backup/"
 sudo systemctl disable --now openvpn-server@server.service
 sudo systemctl disable --now openvpn-manual-nat.service
 sudo nft delete table inet openvpn_manual_nat || true
-sudo rm -f -- /etc/sysctl.d/99-openvpn-manual.conf /etc/openvpn/server/openvpn-manual-nat.nft /etc/openvpn/server/server.conf /etc/openvpn/server/ca.crt /etc/openvpn/server/server.crt /etc/openvpn/server/server.key /etc/openvpn/server/crl.pem /etc/openvpn/server/tls-crypt-v2.key /etc/openvpn/server/auth-verify.sh /etc/systemd/system/openvpn-server@server.service.d/manual.conf /etc/systemd/system/openvpn-manual-nat.service
+sudo rm -f -- /etc/sysctl.d/99-openvpn-manual.conf /etc/openvpn/server/openvpn-manual-nat.nft /etc/openvpn/server/server.conf /etc/openvpn/server/ca.crt /etc/openvpn/server/server.crt /etc/openvpn/server/server.key /etc/openvpn/server/crl.pem /etc/openvpn/server/tls-crypt-v2.key /etc/openvpn/server/auth-verify.sh /etc/openvpn/server/client-event.sh /etc/openvpn/server/event-dispatch.sh /etc/openvpn/server/hooks/authentication-failed /etc/openvpn/server/hooks/client-connected /etc/openvpn/server/hooks/client-disconnected /etc/systemd/system/openvpn-server@server.service.d/manual.conf /etc/systemd/system/openvpn-manual-nat.service
+sudo rmdir --ignore-fail-on-non-empty /etc/openvpn/server/hooks
 sudo systemctl daemon-reload
 sudo sysctl --system
 # 默认保留 /etc/openvpn/manual。确认不再需要 CA 和客户端后，先把它复制到 root-only 备份目录，再删除该明确目录。

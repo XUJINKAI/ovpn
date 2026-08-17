@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# 客户端断开通知示例。
+#
+# 本脚本由 ovpn 的事件分发器调用，而不是直接继承 OpenVPN 的环境。
+# 分发器仅传入下列白名单变量；缺失的值均为空字符串，所有值都应视为不可信输入。
+# 脚本必须在 10 秒内结束，stdout 和 stderr 会进入 openvpn-server@server.service 的 journal。
+# 请勿输出通知 Token、私钥或其他秘密。进程被强制终止、掉电或崩溃时不保证调用本脚本。
+
+set -Eeuo pipefail
+
+readonly EVENT_ARG="${1:-}"                         # 第一个参数，固定为 client-disconnected。
+readonly EVENT="${OVPN_EVENT:-}"                   # 事件名，与第一个参数相同。
+readonly COMMON_NAME="${OVPN_COMMON_NAME:-}"       # 已断开客户端的证书 CN。
+readonly REMOTE_IP="${OVPN_REMOTE_IP:-}"           # 已认证对端的 IPv4 或 IPv6 地址。
+readonly REMOTE_PORT="${OVPN_REMOTE_PORT:-}"       # 已认证对端的来源端口。
+readonly VIRTUAL_IP="${OVPN_IFCONFIG_POOL_REMOTE_IP:-}" # 断开客户端的虚拟 IPv4；不可用时为空。
+readonly CONNECTED_AT="${OVPN_CONNECTED_AT:-}"     # OpenVPN 提供的连接时间文本；不可用时为空。
+readonly DURATION_SECONDS="${OVPN_DURATION_SECONDS:-}" # 本次连接持续秒数；不可用时为空。
+readonly BYTES_RECEIVED="${OVPN_BYTES_RECEIVED:-}" # 服务端从该客户端接收的字节数；不可用时为空。
+readonly BYTES_SENT="${OVPN_BYTES_SENT:-}"         # 服务端向该客户端发送的字节数；不可用时为空。
+
+[[ "$EVENT_ARG" == client-disconnected && "$EVENT" == client-disconnected ]] || exit 0
+
+# 在这里调用邮件、Webhook 或其他通知程序。例如：
+# printf 'OpenVPN disconnected: cn=%s remote=%s:%s virtual=%s duration=%ss rx=%s tx=%s\n' \
+#     "$COMMON_NAME" "$REMOTE_IP" "$REMOTE_PORT" "$VIRTUAL_IP" \
+#     "$DURATION_SECONDS" "$BYTES_RECEIVED" "$BYTES_SENT"
+#
+# OpenVPN 2.6 不提供稳定的断开原因，不能据此可靠判断是否被同 CN 的新连接顶替。
+: "$COMMON_NAME" "$REMOTE_IP" "$REMOTE_PORT" "$VIRTUAL_IP" "$CONNECTED_AT"
+: "$DURATION_SECONDS" "$BYTES_RECEIVED" "$BYTES_SENT"
+
+exit 0

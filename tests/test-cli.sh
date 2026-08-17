@@ -36,6 +36,14 @@ assert_contains "$output" '/usr/local/lib/ovpn'
 assert_contains "$output" 'dry-run 检查完成，未执行系统变更。'
 [[ "$output" != *$'\033['* ]] || fail "非终端结果不应包含 ANSI 颜色"
 [[ -x "$PROJECT_DIR/scripts/auth-verify.sh" ]] || fail "OpenVPN 认证脚本缺失或不可执行"
+[[ -x "$PROJECT_DIR/scripts/client-event.sh" && -x "$PROJECT_DIR/scripts/event-dispatch.sh" ]] || fail "OpenVPN 事件脚本缺失或不可执行"
+for hook_name in authentication-failed client-connected client-disconnected; do
+    [[ -x "$PROJECT_DIR/config/hooks/$hook_name" ]] || fail "事件回调示例缺失或不可执行：$hook_name"
+    for variable in OVPN_EVENT OVPN_COMMON_NAME OVPN_REMOTE_IP OVPN_REMOTE_PORT OVPN_IFCONFIG_POOL_REMOTE_IP \
+        OVPN_CONNECTED_AT OVPN_DURATION_SECONDS OVPN_BYTES_RECEIVED OVPN_BYTES_SENT; do
+        assert_contains "$(<"$PROJECT_DIR/config/hooks/$hook_name")" "$variable"
+    done
+done
 [[ -s "$PROJECT_DIR/network/nat-client.nft.tpl" && -s "$PROJECT_DIR/network/sysctl.conf" ]] || fail "网络资源布局不完整"
 [[ -s "$PROJECT_DIR/systemd/ovpn-nat.service" && -s "$PROJECT_DIR/systemd/ovpn.conf" ]] || fail "systemd 资源布局不完整"
 [[ ! -e "$PROJECT_DIR/config/scripts" && ! -e "$PROJECT_DIR/config/network" && ! -e "$PROJECT_DIR/config/systemd.conf" ]] || fail "旧资源布局仍然存在"
@@ -53,9 +61,25 @@ assert_contains "$output" '-f'
 
 test_dir="$(mktemp -d)"
 trap 'rm -rf -- "$test_dir"' EXIT
+event_hooks="$test_dir/event-hooks"
+event_log="$test_dir/event.log"
+mkdir -p "$event_hooks"
+sed "s|/etc/openvpn/server/hooks|$event_hooks|" "$PROJECT_DIR/scripts/event-dispatch.sh" >"$test_dir/event-dispatch.sh"
+sed "s|/etc/openvpn/server/event-dispatch.sh|$test_dir/event-dispatch.sh|" "$PROJECT_DIR/scripts/auth-verify.sh" >"$test_dir/auth-verify.sh"
+sed "s|/etc/openvpn/server/event-dispatch.sh|$test_dir/event-dispatch.sh|" "$PROJECT_DIR/scripts/client-event.sh" >"$test_dir/client-event.sh"
+chmod 0755 "$test_dir/event-dispatch.sh" "$test_dir/auth-verify.sh" "$test_dir/client-event.sh"
+printf '#!/usr/bin/env bash\nenv | sort >%q\nprintf "ARG=%%s\\n" "$1" >>%q\n' "$event_log" "$event_log" >"$event_hooks/authentication-failed"
+chmod 0755 "$event_hooks/authentication-failed"
+env OVPN_COMMON_NAME=client1 OVPN_REMOTE_IP=203.0.113.10 OVPN_REMOTE_PORT=54321 OVPN_SECRET=must-not-leak \
+    "$test_dir/event-dispatch.sh" authentication-failed
+assert_contains "$(<"$event_log")" 'OVPN_EVENT=authentication-failed'
+assert_contains "$(<"$event_log")" 'OVPN_REMOTE_IP=203.0.113.10'
+assert_contains "$(<"$event_log")" 'ARG=authentication-failed'
+[[ "$(<"$event_log")" != *must-not-leak* ]] || fail "事件分发器泄漏了非白名单环境变量"
+
 printf 'client1\nunused\n' >"$test_dir/credentials"
 : >"$test_dir/auth-db"
-auth_hook="$PROJECT_DIR/scripts/auth-verify.sh"
+auth_hook="$test_dir/auth-verify.sh"
 assert_fails env common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/credentials"
 printf 'client1:!\n' >"$test_dir/auth-db"
 output="$(common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/missing-credentials" 2>&1)"
@@ -75,9 +99,19 @@ env common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir
 printf 'client2\nsecret\n' >"$test_dir/credentials"
 assert_fails env common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/credentials"
 printf 'client1\nwrong\n' >"$test_dir/credentials"
-assert_fails env common_name=client1 OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/credentials"
+assert_fails env common_name=client1 untrusted_ip=198.51.100.20 untrusted_port=45678 OVPN_AUTH_DB="$test_dir/auth-db" \
+    "$auth_hook" "$test_dir/credentials"
+assert_contains "$(<"$event_log")" 'OVPN_REMOTE_IP=198.51.100.20'
+assert_contains "$(<"$event_log")" 'OVPN_REMOTE_PORT=45678'
 assert_fails env common_name=invalid/name OVPN_AUTH_DB="$test_dir/auth-db" "$auth_hook" "$test_dir/credentials"
 unset hash
+
+cp -- "$event_hooks/authentication-failed" "$event_hooks/client-connected"
+env common_name=client1 trusted_ip=192.0.2.30 trusted_port=1194 ifconfig_pool_remote_ip=10.8.0.2 \
+    "$test_dir/client-event.sh" connect "$test_dir/client-config"
+assert_contains "$(<"$event_log")" 'OVPN_EVENT=client-connected'
+assert_contains "$(<"$event_log")" 'OVPN_REMOTE_IP=192.0.2.30'
+assert_contains "$(<"$event_log")" 'OVPN_IFCONFIG_POOL_REMOTE_IP=10.8.0.2'
 
 auth_state="$test_dir/auth-state"
 mkdir -p "$auth_state"
@@ -358,7 +392,7 @@ cp -- "$PROJECT_DIR/config/client/default.conf.tpl" "$server_state/config/client
 cp -- "$PROJECT_DIR/network/"* "$server_state/network/"
 cp -- "$PROJECT_DIR/systemd/"* "$server_state/systemd/"
 cp -- "$PROJECT_DIR/scripts/"* "$server_state/scripts/"
-printf 'SERVER_PORT=49999\nSERVER=10.9.0.0 255.255.255.0\nENDPOINT=vpn.example.com\nCLIENT_PORT=49999\nCLIENT_PROTO=udp4\nCLIENT_DEV=tun\nCLIENT_VERB=3\nAUTH_DIGEST=SHA256\nDATA_CIPHERS=AES-256-GCM\nKEEPALIVE=10 120\n' >"$server_state/config/ovpn.env"
+printf 'SERVER_PORT=49999\nSERVER=10.9.0.0 255.255.255.0\nENDPOINT=vpn.example.com\nCLIENT_PORT=49999\nCLIENT_PROTO=udp4\nCLIENT_DEV=tun\nCLIENT_VERB=3\nAUTH_DIGEST=SHA256\nDATA_CIPHERS=AES-256-GCM\nKEEPALIVE=10 120\nMAX_CLIENTS=100\n' >"$server_state/config/ovpn.env"
 printf 'port {{SERVER_PORT}}\nserver {{SERVER}}\nca {{CA_CERT}}\ncert {{SERVER_CERT}}\nkey {{SERVER_KEY}}\ndh none\ncrl-verify {{CRL_FILE}}\ntls-crypt-v2 {{TLS_CRYPT_V2_SERVER_KEY}}\nauth-user-pass-verify {{AUTH_VERIFY_SCRIPT}} via-file\nsetenv OVPN_AUTH_DB {{AUTH_DB}}\n{{APPEND_CONFIG}}\n' >"$server_state/config/server/default.conf.tpl"
 bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
@@ -375,6 +409,16 @@ assert_contains "$(<"$test_dir/server.conf")" 'key /etc/openvpn/server/server.ke
 assert_contains "$(<"$test_dir/server.conf")" 'crl-verify /etc/openvpn/server/crl.pem'
 assert_contains "$(<"$test_dir/server.conf")" 'tls-crypt-v2 /etc/openvpn/server/tls-crypt-v2.key'
 assert_contains "$(<"$test_dir/server.conf")" 'auth-user-pass-verify /etc/openvpn/server/auth-verify.sh via-file'
+assert_contains "$(<"$PROJECT_DIR/config/server/default.conf.tpl")" 'max-clients {{MAX_CLIENTS}}'
+assert_contains "$(<"$PROJECT_DIR/config/server/default.conf.tpl")" 'client-connect {{CLIENT_EVENT_SCRIPT}} connect'
+assert_fails bash -Eeuo pipefail -c '
+    source "$1/lib/common.sh"
+    source "$1/lib/server.sh"
+    OVPN_STATE_DIR="$2"
+    OVPN_RESOURCE_DIR="$2"
+    assignments=("MAX_CLIENTS=0")
+    ovpn_render_server "$3" default assignments
+' _ "$PROJECT_DIR" "$server_state" "$test_dir/server-max-invalid.conf"
 printf 'port {{SERVER_PORT}}\nserver {{SERVER}}\n{{APPEND_CONFIG}}\nca {{CA_CERT}}\ncert {{SERVER_CERT}}\nkey {{SERVER_KEY}}\ndh none\ncrl-verify {{CRL_FILE}}\ntls-crypt-v2 {{TLS_CRYPT_V2_SERVER_KEY}}\nauth-user-pass-verify {{AUTH_VERIFY_SCRIPT}} via-file\nsetenv OVPN_AUTH_DB {{AUTH_DB}}\n' >"$server_state/config/server/example.conf.tpl"
 bash -Eeuo pipefail -c '
     source "$1/lib/common.sh"
@@ -479,6 +523,11 @@ assert_contains "$output" "$server_state/auth-db"
 mkdir -p "$test_dir/bin"
 printf '#!/usr/bin/env bash\nexit 0\n' >"$test_dir/bin/openvpn"
 chmod 0755 "$test_dir/bin/openvpn"
+printf crl >"$server_state/pki/crl.pem"
+output="$(PATH="$test_dir/bin:$PATH" "$OVPN" --dir "$server_state" --dry-run apply)"
+assert_contains "$output" '/etc/openvpn/server/client-event.sh'
+assert_contains "$output" '/etc/openvpn/server/event-dispatch.sh'
+assert_contains "$output" '/etc/openvpn/server/hooks'
 output="$(cd "$test_dir" && PATH="$test_dir/bin:$PATH" "$OVPN" --dir "$server_state" --dry-run export client1 2>&1)"
 assert_contains "$output" "$test_dir/client1.ovpn"
 [[ "$output" != *'{{SERVER_PORT}} 出现 0 次'* && "$output" != *'{{SERVER_DEV}} 出现 0 次'* ]] || fail "客户端导出不应警告服务端分区变量"

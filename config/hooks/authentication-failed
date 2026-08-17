@@ -1,0 +1,33 @@
+#!/usr/bin/env bash
+# 口令认证失败通知示例。
+#
+# 本脚本由 ovpn 的事件分发器调用，而不是直接继承 OpenVPN 的环境。
+# 分发器仅传入下列白名单变量；缺失的值均为空字符串，所有值都应视为不可信输入。
+# 脚本必须在 10 秒内结束，stdout 和 stderr 会进入 openvpn-server@server.service 的 journal。
+# 请勿输出通知 Token、密码或其他秘密。通知失败不会改变原始认证结果。
+
+set -Eeuo pipefail
+
+readonly EVENT_ARG="${1:-}"                         # 第一个参数，固定为 authentication-failed。
+readonly EVENT="${OVPN_EVENT:-}"                   # 事件名，与第一个参数相同。
+readonly COMMON_NAME="${OVPN_COMMON_NAME:-}"       # 客户端证书 CN；无有效 CN 时可能为空。
+readonly REMOTE_IP="${OVPN_REMOTE_IP:-}"           # 认证前来源 IPv4 或 IPv6 地址，仅用于通知。
+readonly REMOTE_PORT="${OVPN_REMOTE_PORT:-}"       # 认证前来源端口。
+readonly VIRTUAL_IP="${OVPN_IFCONFIG_POOL_REMOTE_IP:-}" # 尚未建立连接，本事件中为空。
+readonly CONNECTED_AT="${OVPN_CONNECTED_AT:-}"     # 尚未建立连接，本事件中为空。
+readonly DURATION_SECONDS="${OVPN_DURATION_SECONDS:-}" # 尚未建立连接，本事件中为空。
+readonly BYTES_RECEIVED="${OVPN_BYTES_RECEIVED:-}" # 尚未建立连接，本事件中为空。
+readonly BYTES_SENT="${OVPN_BYTES_SENT:-}"         # 尚未建立连接，本事件中为空。
+
+# 防止直接执行或错误分发时产生通知。
+[[ "$EVENT_ARG" == authentication-failed && "$EVENT" == authentication-failed ]] || exit 0
+
+# 在这里调用邮件、Webhook 或其他通知程序。例如：
+# printf 'OpenVPN authentication failed: cn=%s remote=%s:%s\n' \
+#     "$COMMON_NAME" "$REMOTE_IP" "$REMOTE_PORT"
+#
+# 若使用 curl，请从仅服务身份可读的独立文件读取 Token，不要把 Token 写进参数、输出或本仓库。
+: "$COMMON_NAME" "$REMOTE_IP" "$REMOTE_PORT" "$VIRTUAL_IP" "$CONNECTED_AT"
+: "$DURATION_SECONDS" "$BYTES_RECEIVED" "$BYTES_SENT"
+
+exit 0

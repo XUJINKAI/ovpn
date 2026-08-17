@@ -70,11 +70,14 @@ ovpn_full_help() {
 
 install 只安装管理器；core install 使用 apt 安装 OpenVPN 和运行依赖，不执行 apt update。
 除帮助外的命令会在需要时自动使用 sudo 重新执行，不需要手写 sudo。
-install 总是按目录布局复制源码中缺失的配置、脚本、网络和systemd资源，不受 --ln 或 --copy 影响。
+install 只补充缺失的用户配置，不覆盖环境文件、模板或 hooks；工具拥有的 scripts、network 和 systemd 静态资源每次都从当前源码更新，不受 --ln 或 --copy 影响。
 ca init 使用 Easy-RSA 创建本地 CA 和服务端凭据，CA 与服务端证书默认有效 3650 天，可用 --days 同时调整；已有 CA 时拒绝操作，--force 会先备份并替换 CA、客户端及密码状态。
 edit 原样打开公共环境文件或指定模板，server 和 client 省略模板名时使用 default；命令不校验、不应用配置，默认使用 vi，可通过 OVPN_EDITOR 指定其他单个编辑器命令。
 apply 默认使用 config/server/default.conf.tpl，可用 --template 选择其他模板；--env 覆盖变量，--add-config 在 {{APPEND_CONFIG}} 位置插入配置行，两个参数均可重复。
 apply 校验候选配置、部署运行文件并启用和启动服务；命令行覆盖只影响本次生成的运行配置，不修改模板或 ovpn.env。
+默认服务端模板从 ovpn.env 的 MAX_CLIENTS 生成 OpenVPN 原生全局连接上限；ovpn 不维护每客户端身份的连接计数。
+config/hooks/ 可提供 authentication-failed、client-connected 和 client-disconnected 三个可执行回调；apply 部署降权运行副本，回调失败或十秒超时不影响认证和连接。
+authentication-failed 只覆盖受管口令认证拒绝，不覆盖证书、TLS、tls-crypt-v2 或 max-clients 的早期拒绝。
 core test 只静态检查当前运行配置；OpenVPN 2.6 没有 TLS 配置的无副作用完整校验，start 和 restart 是最终验证。
 core logs 显示服务端实例最近 100 行 journal，-f 持续显示新日志；start 或 restart 失败时会自动显示这些日志并停止自动重试。
 network ipv4_forward 只管理 /etc/sysctl.d/99-ovpn.conf；disable 不强制写入 0，以免覆盖其他转发配置。
